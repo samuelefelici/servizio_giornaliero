@@ -9,6 +9,9 @@ RESIDENZA_RENAME = {
     "DepOstra": "OSTRA",
     "JESI": "JESI EXTRAURBANO",
     "JESI_URBANO": "JESI URBANO",
+    "DepPolverigi": "POLVERIGI",
+    "DepBelvede": "BELVEDERE",
+    
 }
 
 HEADER_PROBE = "Cognome e Nome"
