@@ -7,12 +7,13 @@ import pandas as pd
 from pathlib import Path
 
 def df_to_table_data(df: pd.DataFrame):
-    keep = [c for c in ["Residenza","Matricola","Cognome e Nome","Turno","Inizio","Fine","Indennità e note","Stato"] if c in df.columns]
+    keep = [c for c in ["Residenza","Matricola","Cognome e Nome","Turno","Inizio","Fine","Indennità e note"] if c in df.columns]
     dfp = df[keep].copy()
     dfp.columns = [c.replace("Indennità e note","Note") for c in dfp.columns]
     header = list(dfp.columns)
     rows = dfp.fillna("").values.tolist()
     return [header] + rows
+
 
 def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict, logo_path: Path|None=None, title: str="Servizio Giornaliero"):
     doc = SimpleDocTemplate(str(path_out), pagesize=A4, rightMargin=10*mm, leftMargin=10*mm, topMargin=12*mm, bottomMargin=12*mm)
