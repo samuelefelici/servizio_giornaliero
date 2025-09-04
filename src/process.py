@@ -46,3 +46,40 @@ def read_input_excel(file) -> tuple[pd.DataFrame, dict]:
 
     meta = {"data": date_str, "giorno": day_str, "origine": origine}
     return df, meta
+
+def transform_dataframe(df: pd.DataFrame, config_dir: Path) -> pd.DataFrame:
+    """
+    Applica:
+      1) filtro matricole/turni da omettere (da CSV in config_dir)
+      2) rinomina Residenza
+      3) sostituzione sigle di assenza -> 'Assente' direttamente in Turno
+      4) ordinamento per DEFAULT_SORT (+ 'Cognome e Nome' come tie-breaker)
+    """
+    matricole_omit, turni_omit = load_config_tables(config_dir)
+
+    # 1) Filtri
+    if "Matricola" in df.columns and len(matricole_omit):
+        df = df[~df["Matricola"].isin(matricole_omit)].copy()
+    if "Turno" in df.columns and len(turni_omit):
+        df = df[~df["Turno"].isin(turni_omit)].copy()
+
+    # 2) Rinomina residenze
+    if "Residenza" in df.columns:
+        df["Residenza"] = df["Residenza"].replace(RESIDENZA_RENAME)
+
+    # 3) Turno -> 'Assente' se sigla di assenza
+    if "Turno" in df.columns:
+        df["Turno"] = (
+            df["Turno"].astype(str).str.strip()
+            .apply(lambda x: "Assente" if x in ABSENCE_CODES else x)
+        )
+
+    # 4) Ordinamento
+    sort_cols = [c for c in DEFAULT_SORT if c in df.columns]
+    by = sort_cols.copy()
+    if "Cognome e Nome" in df.columns:
+        by.append("Cognome e Nome")
+
+    df_sorted = df.sort_values(by=by, kind="mergesort").reset_index(drop=True) if by else df.reset_index(drop=True)
+    return df_sorted
+
