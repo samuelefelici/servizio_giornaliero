@@ -5,3 +5,4 @@ xlrd==1.2.0          # per i .xls legacy
 reportlab==4.2.2     # PDF (wheel disponibile su py311)
 Pillow==10.3.0       # immagini per reportlab
 python-dateutil==2.9.0.post0
+lxml==5.2.2
