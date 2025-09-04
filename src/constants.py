@@ -6,8 +6,9 @@ ABSENCE_CODES = {
 }
 
 RESIDENZA_RENAME = {
-    "CASTELFIDARDO": "C.FID.",
-    "FILOTTRANO": "FILOT",
+    "DepOstra": "OSTRA",
+    "JESI": "JESI EXTRAURBANO",
+    "JESI_URBANO": "JESI URBANO",
 }
 
 HEADER_PROBE = "Cognome e Nome"
