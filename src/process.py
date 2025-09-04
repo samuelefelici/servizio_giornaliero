@@ -8,40 +8,108 @@ from .constants import (
 )
 from .utils import find_header_row, coerce_time, clean_spaces
 
-# --- helper: sniff dei bytes per scegliere l'engine
-def _pick_engine_from_bytes(b: bytes) -> str | None:
-    # XLSX (ZIP): inizia con PK\x03\x04
-    if len(b) >= 4 and b[:4] == b"PK\x03\x04":
-        return "openpyxl"
-    # XLS (OLE CF): D0 CF 11 E0 A1 B1 1A E1
-    if len(b) >= 8 and b[:8] == b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1":
-        return "xlrd"
-    # XML 2003 o HTML "mascherati": non gestiamo qui, proveremo gli engine standard
-    return None
 
-def _read_excel_robusto(file) -> pd.DataFrame:
+# ----------------------- Sniffer di formato -----------------------
+
+def _is_zip(b: bytes) -> bool:
+    # XLSX/OOXML zip magic
+    return len(b) >= 4 and b[:4] == b"PK\x03\x04"
+
+def _is_ole(b: bytes) -> bool:
+    # XLS OLE2/CFB magic
+    return len(b) >= 8 and b[:8] == b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"
+
+def _is_probably_text(b: bytes) -> bool:
+    # Molti "xls" legacy sono in realtà TSV/CSV (anche UTF-16)
+    # Heuristics: presenza di tab/comma/semicolon in prime righe o BOM UTF-16
+    if b.startswith(b"\xff\xfe") or b.startswith(b"\xfe\xff"):
+        return True  # UTF-16 testo
+    # se contiene molti NUL, potrebbe essere UTF-16 senza BOM
+    if b[:2000].count(b"\x00") > 50:
+        return True
+    txt = b[:4096].decode("utf-8", errors="ignore")
+    seps = ["\t", ";", ",", "|"]
+    return any(s in txt for s in seps)
+
+def _is_html(b: bytes) -> bool:
+    # Excel "Salva come pagina web" con estensione .xls
+    head = b[:1024].lstrip().lower()
+    return head.startswith(b"<!doctype html") or head.startswith(b"<html")
+
+def _is_xml_spreadsheetml(b: bytes) -> bool:
+    # Excel 2003 XML (SpreadsheetML). Facoltativo, qui lo trattiamo come testo/HTML.
+    head = b[:2048].lstrip().lower()
+    return head.startswith(b"<?xml") and b"<workbook" in head and b"spreadsheetml" in head
+
+
+def _guess_text_delimiter(text: str) -> str:
+    # Sceglie il separatore più probabile tra tab, ;, , , |
+    lines = [ln for ln in text.splitlines()[:10] if ln.strip()]
+    cand = ["\t", ";", ",", "|"]
+    counts = {c: 0 for c in cand}
+    for ln in lines:
+        for c in cand:
+            counts[c] += ln.count(c)
+    # default: tab
+    best = max(counts, key=counts.get)
+    return best if counts[best] > 0 else "\t"
+
+
+def _read_text_table(raw: bytes) -> pd.DataFrame:
+    # Decodifica: prova UTF-16, poi UTF-8-sig, poi UTF-8, infine latin-1
+    for enc in ("utf-16", "utf-8-sig", "utf-8", "latin-1"):
+        try:
+            txt = raw.decode(enc)
+            break
+        except Exception:
+            txt = None
+    if txt is None:
+        # come fallback estremo, sostituisce byte non validi
+        txt = raw.decode("utf-8", errors="replace")
+
+    sep = _guess_text_delimiter(txt)
+    return pd.read_csv(io.StringIO(txt), sep=sep, header=None, dtype=str, keep_default_na=False)
+
+
+def _read_html_table(raw: bytes) -> pd.DataFrame:
+    # Richiede lxml nei requirements
+    txt = raw.decode("utf-8", errors="ignore")
+    tables = pd.read_html(io.StringIO(txt), header=None, flavor="lxml")
+    # Prendiamo la prima tabella "significativa"
+    df = max(tables, key=lambda d: d.shape[1] * d.shape[0])
+    return df
+
+
+def _read_excel_robusto(file) -> tuple[pd.DataFrame, str]:
     """
-    Legge qualsiasi UploadedFile/stream/percorso provando:
-    - engine dedotto dai bytes se disponibile
-    - openpyxl -> xlrd (o viceversa) come fallback
+    Ritorna (df_raw, origine), dove origine ∈ {"xls-ole","xlsx-zip","text","html","xml","unknown"}
+    Supporta:
+      - path stringa/Path
+      - stream/UploadedFile
     """
-    # 1) se è un path stringa, usiamo il percorso direttamente
+    # 1) Se è un path, usiamo estensione per engine
     if isinstance(file, (str, Path)):
         ext = Path(file).suffix.lower()
-        engine = "xlrd" if ext == ".xls" else "openpyxl"
-        try:
-            return pd.read_excel(file, header=None, engine=engine)
-        except Exception:
-            # fallback inverso
-            alt = "openpyxl" if engine == "xlrd" else "xlrd"
-            return pd.read_excel(file, header=None, engine=alt)
+        if ext == ".xls":
+            try:
+                return pd.read_excel(file, header=None, engine="xlrd"), "xls-ole"
+            except Exception:
+                # potrebbe essere HTML/TSV travestito
+                raw = Path(file).read_bytes()
+                if _is_html(raw):
+                    return _read_html_table(raw), "html"
+                if _is_probably_text(raw):
+                    return _read_text_table(raw), "text"
+                raise
+        else:
+            # assume xlsx/ooxml
+            return pd.read_excel(file, header=None, engine="openpyxl"), "xlsx-zip"
 
-    # 2) se è un oggetto tipo Streamlit UploadedFile / file-like: prendo i bytes
-    raw_bytes = None
-    if hasattr(file, "getvalue"):         # Streamlit UploadedFile
-        raw_bytes = file.getvalue()
-    elif hasattr(file, "read"):            # file-like
-        raw_bytes = file.read()
+    # 2) Se è uno stream (Streamlit UploadedFile o simili): leggi i bytes
+    if hasattr(file, "getvalue"):
+        raw = file.getvalue()
+    elif hasattr(file, "read"):
+        raw = file.read()
         try:
             file.seek(0)
         except Exception:
@@ -49,44 +117,44 @@ def _read_excel_robusto(file) -> pd.DataFrame:
     else:
         raise ValueError("Oggetto file non supportato.")
 
-    bio = io.BytesIO(raw_bytes)
-    guessed = _pick_engine_from_bytes(raw_bytes)
+    # 3) Sniff
+    if _is_ole(raw):
+        bio = io.BytesIO(raw)
+        return pd.read_excel(bio, header=None, engine="xlrd"), "xls-ole"
 
-    # Prova 1: engine “sniffato” (se c'è)
-    if guessed:
+    if _is_zip(raw):
+        bio = io.BytesIO(raw)
+        return pd.read_excel(bio, header=None, engine="openpyxl"), "xlsx-zip"
+
+    if _is_html(raw):
+        return _read_html_table(raw), "html"
+
+    if _is_xml_spreadsheetml(raw):
+        # Molti SpreadsheetML sono apribili anche con read_html; se serve, si può
+        # implementare un parser XML dedicato. Per ora usiamo fallback testuale.
         try:
-            bio.seek(0)
-            return pd.read_excel(bio, header=None, engine=guessed)
+            return _read_html_table(raw), "html"
         except Exception:
-            pass
+            return _read_text_table(raw), "xml"
 
-    # Prova 2: openpyxl
-    try:
-        bio.seek(0)
-        return pd.read_excel(bio, header=None, engine="openpyxl")
-    except Exception:
-        pass
+    if _is_probably_text(raw):
+        return _read_text_table(raw), "text"
 
-    # Prova 3: xlrd (per .xls)
-    try:
-        bio.seek(0)
-        return pd.read_excel(bio, header=None, engine="xlrd")
-    except Exception as e:
-        raise ValueError(
-            "Formato Excel non riconosciuto: prova a salvare il file come .xlsx oppure "
-            "verifica che non sia un HTML/XML camuffato."
-        ) from e
+    # Ultimo tentativo: prova entrambi gli engine in caso di file borderline
+    for eng, tag in (("openpyxl", "xlsx-zip"), ("xlrd", "xls-ole")):
+        try:
+            bio = io.BytesIO(raw)
+            return pd.read_excel(bio, header=None, engine=eng), tag
+        except Exception:
+            continue
+
+    raise ValueError(
+        "Formato Excel non riconosciuto. Se il file proviene da un gestionale legacy, "
+        "prova a risalvarlo come .xlsx oppure esportalo come CSV/TSV."
+    )
 
 
-def parse_date_and_day(df_raw: pd.DataFrame) -> tuple[str, str]:
-    date_str = str(df_raw.iloc[0, 0]).strip() if df_raw.shape[1] > 0 else ""
-    day_str  = str(df_raw.iloc[1, 0]).strip() if df_raw.shape[1] > 0 and len(df_raw) > 1 else ""
-    try:
-        dt = parser.parse(date_str, dayfirst=True).date()
-        date_str = dt.strftime("%d/%m/%Y")
-    except Exception:
-        pass
-    return date_str, day_str
+# ----------------------- Logica applicativa -----------------------
 
 def load_config_tables(config_dir: Path):
     m_path = config_dir / "matricole_da_omettere.csv"
@@ -106,9 +174,21 @@ def load_config_tables(config_dir: Path):
 
     return matricole, turni
 
+
+def parse_date_and_day(df_raw: pd.DataFrame) -> tuple[str, str]:
+    date_str = str(df_raw.iloc[0, 0]).strip() if df_raw.shape[1] > 0 else ""
+    day_str  = str(df_raw.iloc[1, 0]).strip() if df_raw.shape[1] > 0 and len(df_raw) > 1 else ""
+    try:
+        dt = parser.parse(date_str, dayfirst=True).date()
+        date_str = dt.strftime("%d/%m/%Y")
+    except Exception:
+        pass
+    return date_str, day_str
+
+
 def read_input_excel(file) -> tuple[pd.DataFrame, dict]:
-    # <-- QUI il cambio: usiamo il lettore robusto che sceglie l'engine
-    df_raw = _read_excel_robusto(file)
+    # Usa il lettore robusto che sceglie la strategia corretta
+    df_raw, origine = _read_excel_robusto(file)
 
     date_str, day_str = parse_date_and_day(df_raw)
     hdr_row = find_header_row(df_raw, HEADER_PROBE)
@@ -132,26 +212,34 @@ def read_input_excel(file) -> tuple[pd.DataFrame, dict]:
     if "Fine" in df.columns:
         df["Fine"] = coerce_time(df["Fine"])
 
-    meta = {"data": date_str, "giorno": day_str}
+    meta = {"data": date_str, "giorno": day_str, "origine": origine}
     return df, meta
+
 
 def transform_dataframe(df: pd.DataFrame, config_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     matricole_omit, turni_omit = load_config_tables(config_dir)
 
+    # 1) Matricole da omettere
     if "Matricola" in df.columns and len(matricole_omit):
         df = df[~df["Matricola"].isin(matricole_omit)].copy()
 
+    # 2) Turni/attività da omettere
     if "Turno" in df.columns and len(turni_omit):
         df = df[~df["Turno"].isin(turni_omit)].copy()
 
+    # 3) Rinomina residenze
     if "Residenza" in df.columns:
         df["Residenza"] = df["Residenza"].replace(RESIDENZA_RENAME)
 
+    # 4) Stato = "Assente" se Turno ∈ ABSENCE_CODES
     if "Turno" in df.columns:
-        df["Stato"] = df["Turno"].astype(str).str.strip().apply(lambda x: "Assente" if x in ABSENCE_CODES else "")
+        df["Stato"] = df["Turno"].astype(str).str.strip().apply(
+            lambda x: "Assente" if x in ABSENCE_CODES else ""
+        )
     else:
         df["Stato"] = ""
 
+    # 5) Ordinamento
     sort_cols = [c for c in DEFAULT_SORT if c in df.columns]
     by = sort_cols.copy()
     if "Cognome e Nome" in df.columns:
@@ -159,6 +247,7 @@ def transform_dataframe(df: pd.DataFrame, config_dir: Path) -> tuple[pd.DataFram
 
     df_sorted = df.sort_values(by=by, kind="mergesort").reset_index(drop=True) if by else df.reset_index(drop=True)
 
+    # 6) Riepilogo sigle assenza
     if "Turno" in df_sorted.columns:
         riepilogo = (
             df_sorted["Turno"].astype(str).str.strip()
