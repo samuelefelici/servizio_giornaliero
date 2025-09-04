@@ -1,3 +1,4 @@
+import csv
 import io
 from pathlib import Path
 import pandas as pd
@@ -56,19 +57,58 @@ def _guess_text_delimiter(text: str) -> str:
 
 
 def _read_text_table(raw: bytes) -> pd.DataFrame:
-    # Decodifica: prova UTF-16, poi UTF-8-sig, poi UTF-8, infine latin-1
-    for enc in ("utf-16", "utf-8-sig", "utf-8", "latin-1"):
+    """
+    Legge file testuali (TSV/CSV anche sporchi, UTF-16/UTF-8/CP1252).
+    Usa csv.reader per gestire righe con numero di colonne variabile,
+    poi pad a destra per uniformare la larghezza.
+    """
+    # 1) Decodifica robusta
+    txt = None
+    for enc in ("utf-16", "utf-8-sig", "cp1252", "utf-8", "latin-1"):
         try:
             txt = raw.decode(enc)
             break
         except Exception:
-            txt = None
+            continue
     if txt is None:
-        # come fallback estremo, sostituisce byte non validi
         txt = raw.decode("utf-8", errors="replace")
 
-    sep = _guess_text_delimiter(txt)
-    return pd.read_csv(io.StringIO(txt), sep=sep, header=None, dtype=str, keep_default_na=False)
+    # 2) Candidati separatori (tab è il default più probabile)
+    candidate_seps = ["\t", ";", ",", "|"]
+
+    # 3) Prova i separatori in ordine, scegli il primo che produce una tabella "decente"
+    best_df = None
+    for sep in candidate_seps:
+        try:
+            rows = list(csv.reader(io.StringIO(txt), delimiter=sep))
+            if not rows:
+                continue
+            width = max(len(r) for r in rows)
+            # Se width è 1, probabilmente sep sbagliato → prova il prossimo
+            if width < 2:
+                continue
+            # Pad a destra
+            for r in rows:
+                if len(r) < width:
+                    r.extend([""] * (width - len(r)))
+            df = pd.DataFrame(rows)
+            # euristica: accettiamo se almeno 5 colonne e almeno 5 righe
+            if df.shape[1] >= 5 and df.shape[0] >= 5:
+                best_df = df
+                break
+            # altrimenti conserva come possibile fallback "meno buono"
+            if best_df is None:
+                best_df = df
+        except Exception:
+            continue
+
+    if best_df is None:
+        # Estremo fallback: whitespace variabile
+        # (meno preciso, ma meglio che niente)
+        df = pd.read_csv(io.StringIO(txt), sep=r"\s+", header=None, dtype=str, keep_default_na=False, engine="python")
+        best_df = df
+
+    return best_df
 
 
 def _read_html_table(raw: bytes) -> pd.DataFrame:
