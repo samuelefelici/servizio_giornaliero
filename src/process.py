@@ -6,130 +6,13 @@ from .constants import (
     ABSENCE_CODES, RESIDENZA_RENAME, DEFAULT_SORT,
     HEADER_PROBE, EXPECTED_COLUMNS
 )
-from .utils import find_header_row, coerce_time, clean_spaces
-
-# ---------- sniffer helpers (come nella versione precedente) ----------
-def _is_zip(b: bytes) -> bool: return len(b) >= 4 and b[:4] == b"PK\x03\x04"
-def _is_ole(b: bytes) -> bool: return len(b) >= 8 and b[:8] == b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"
-def _is_html(b: bytes) -> bool:
-    head = b[:1024].lstrip().lower()
-    return head.startswith(b"<!doctype html") or head.startswith(b"<html")
-def _is_xml_spreadsheetml(b: bytes) -> bool:
-    head = b[:2048].lstrip().lower()
-    return head.startswith(b"<?xml") and b"<workbook" in head and b"spreadsheetml" in head
-def _is_probably_text(b: bytes) -> bool:
-    if b.startswith(b"\xff\xfe") or b.startswith(b"\xfe\xff"): return True
-    if b[:2000].count(b"\x00") > 50: return True
-    txt = b[:4096].decode("utf-8", errors="ignore")
-    return any(s in txt for s in ["\t",";",",","|"])
-
-def _read_text_table(raw: bytes) -> pd.DataFrame:
-    # robusto a righe con #colonne variabile
-    txt = None
-    for enc in ("utf-16","utf-8-sig","cp1252","utf-8","latin-1"):
-        try:
-            txt = raw.decode(enc); break
-        except Exception: continue
-    if txt is None:
-        txt = raw.decode("utf-8", errors="replace")
-    candidate_seps = ["\t",";",",","|"]
-    best_df = None
-    for sep in candidate_seps:
-        try:
-            rows = list(csv.reader(io.StringIO(txt), delimiter=sep))
-            if not rows: continue
-            width = max(len(r) for r in rows)
-            if width < 2: continue
-            for r in rows:
-                if len(r) < width: r.extend([""]*(width-len(r)))
-            df = pd.DataFrame(rows)
-            if df.shape[1] >= 5 and df.shape[0] >= 5:
-                best_df = df; break
-            if best_df is None: best_df = df
-        except Exception:
-            continue
-    if best_df is None:
-        df = pd.read_csv(io.StringIO(txt), sep=r"\s+", header=None, dtype=str, keep_default_na=False, engine="python")
-        best_df = df
-    return best_df
-
-def _read_html_table(raw: bytes) -> pd.DataFrame:
-    txt = raw.decode("utf-8", errors="ignore")
-    tables = pd.read_html(io.StringIO(txt), header=None, flavor="lxml")
-    return max(tables, key=lambda d: d.shape[1]*d.shape[0])
-
-def _read_excel_robusto(file) -> tuple[pd.DataFrame, str]:
-    # path → usa estensione; stream → sniff
-    if isinstance(file, (str, Path)):
-        ext = Path(file).suffix.lower()
-        if ext == ".xls":
-            try:
-                return pd.read_excel(file, header=None, engine="xlrd"), "xls-ole"
-            except Exception:
-                raw = Path(file).read_bytes()
-                if _is_html(raw): return _read_html_table(raw), "html"
-                if _is_probably_text(raw): return _read_text_table(raw), "text"
-                raise
-        else:
-            return pd.read_excel(file, header=None, engine="openpyxl"), "xlsx-zip"
-
-    if hasattr(file, "getvalue"):
-        raw = file.getvalue()
-    elif hasattr(file, "read"):
-        raw = file.read()
-        try: file.seek(0)
-        except Exception: pass
-    else:
-        raise ValueError("Oggetto file non supportato.")
-
-    if _is_ole(raw):
-        return pd.read_excel(io.BytesIO(raw), header=None, engine="xlrd"), "xls-ole"
-    if _is_zip(raw):
-        return pd.read_excel(io.BytesIO(raw), header=None, engine="openpyxl"), "xlsx-zip"
-    if _is_html(raw): return _read_html_table(raw), "html"
-    if _is_xml_spreadsheetml(raw):
-        try: return _read_html_table(raw), "html"
-        except Exception: return _read_text_table(raw), "xml"
-    if _is_probably_text(raw): return _read_text_table(raw), "text"
-
-    for eng, tag in (("openpyxl","xlsx-zip"), ("xlrd","xls-ole")):
-        try:
-            return pd.read_excel(io.BytesIO(raw), header=None, engine=eng), tag
-        except Exception:
-            continue
-    raise ValueError("Formato Excel non riconosciuto. Prova a risalvare come .xlsx o esporta CSV/TSV.")
-
-# ---------- config ----------
-def load_config_tables(config_dir: Path):
-    m_path = config_dir / "matricole_da_omettere.csv"
-    t_path = config_dir / "turni_attivita_da_omettere.csv"
-    if m_path.exists():
-        m_omit = pd.read_csv(m_path, dtype=str, keep_default_na=False)
-        matricole = set(m_omit.get("Matricola", pd.Series(dtype=str)).astype(str).str.strip())
-    else:
-        matricole = set()
-    if t_path.exists():
-        t_omit = pd.read_csv(t_path, dtype=str, keep_default_na=False)
-        turni = set(t_omit.get("Turno", pd.Series(dtype=str)).astype(str).str.strip())
-    else:
-        turni = set()
-    return matricole, turni
-
-# ---------- parsing base ----------
-def parse_date_and_day(df_raw: pd.DataFrame) -> tuple[str,str]:
-    date_str = str(df_raw.iloc[0,0]).strip() if df_raw.shape[1]>0 else ""
-    day_str  = str(df_raw.iloc[1,0]).strip() if df_raw.shape[1]>0 and len(df_raw)>1 else ""
-    try:
-        dt = parser.parse(date_str, dayfirst=True).date()
-        date_str = dt.strftime("%d/%m/%Y")
-    except Exception:
-        pass
-    return date_str, day_str
+from .utils import find_header_row, coerce_time, clean_spaces, clean_column_names
+# ...............................
 
 def read_input_excel(file) -> tuple[pd.DataFrame, dict]:
     df_raw, origine = _read_excel_robusto(file)
 
-    # 🔹 PULIZIA PRIMA: così la ricerca header non fallisce per spazi/NBSP
+    # 🔹 PULIZIA PRIMA
     df_raw = clean_spaces(df_raw)
 
     date_str, day_str = parse_date_and_day(df_raw)
@@ -139,12 +22,17 @@ def read_input_excel(file) -> tuple[pd.DataFrame, dict]:
 
     # Prendiamo tutte le colonne dopo l'header, poi selezioniamo per nome
     df = df_raw.iloc[hdr_row:, :].copy()
-    # 🔹 nomi colonna ripuliti
     df.columns = clean_column_names(df.iloc[0].tolist())
     df = df.iloc[1:].reset_index(drop=True)
 
     # 🔹 PULIZIA DOPO: trim su tutte le celle stringa delle colonne utili
     keep_cols = [c for c in EXPECTED_COLUMNS if c in df.columns]
+    if not keep_cols:
+        raise ValueError(
+            "Nessuna delle colonne attese è presente. "
+            "Controlla che l'intestazione contenga almeno una tra: "
+            + ", ".join(EXPECTED_COLUMNS)
+        )
     df = df[keep_cols].copy()
     df = clean_spaces(df)
 
@@ -158,35 +46,3 @@ def read_input_excel(file) -> tuple[pd.DataFrame, dict]:
 
     meta = {"data": date_str, "giorno": day_str, "origine": origine}
     return df, meta
-
-
-# ---------- trasformazione (SENZA riepilogo) ----------
-def transform_dataframe(df: pd.DataFrame, config_dir: Path) -> pd.DataFrame:
-    matricole_omit, turni_omit = load_config_tables(config_dir)
-
-    # 1) Filtri
-    if "Matricola" in df.columns and len(matricole_omit):
-        df = df[~df["Matricola"].isin(matricole_omit)].copy()
-    if "Turno" in df.columns and len(turni_omit):
-        df = df[~df["Turno"].isin(turni_omit)].copy()
-
-    # 2) Rinomina residenze
-    if "Residenza" in df.columns:
-        df["Residenza"] = df["Residenza"].replace(RESIDENZA_RENAME)
-
-    # 3) Sostituzione: se il turno è una sigla di assenza, scrivi "Assente"
-    if "Turno" in df.columns:
-        df["Turno"] = (
-            df["Turno"]
-            .astype(str).str.strip()
-            .apply(lambda x: "Assente" if x in ABSENCE_CODES else x)
-        )
-
-    # 4) Ordinamento
-    sort_cols = [c for c in DEFAULT_SORT if c in df.columns]
-    by = sort_cols.copy()
-    if "Cognome e Nome" in df.columns:
-        by.append("Cognome e Nome")
-    df_sorted = df.sort_values(by=by, kind="mergesort").reset_index(drop=True) if by else df.reset_index(drop=True)
-
-    return df_sorted
