@@ -155,22 +155,29 @@ def read_input_excel(file) -> tuple[pd.DataFrame, dict]:
 def transform_dataframe(df: pd.DataFrame, config_dir: Path) -> pd.DataFrame:
     matricole_omit, turni_omit = load_config_tables(config_dir)
 
+    # 1) Filtri
     if "Matricola" in df.columns and len(matricole_omit):
         df = df[~df["Matricola"].isin(matricole_omit)].copy()
     if "Turno" in df.columns and len(turni_omit):
         df = df[~df["Turno"].isin(turni_omit)].copy()
+
+    # 2) Rinomina residenze
     if "Residenza" in df.columns:
         df["Residenza"] = df["Residenza"].replace(RESIDENZA_RENAME)
 
-    # manteniamo 'Stato' per usi futuri/visivi
+    # 3) Sostituzione: se il turno è una sigla di assenza, scrivi "Assente"
     if "Turno" in df.columns:
-        df["Stato"] = df["Turno"].astype(str).str.strip().apply(lambda x: "Assente" if x in ABSENCE_CODES else "")
-    else:
-        df["Stato"] = ""
+        df["Turno"] = (
+            df["Turno"]
+            .astype(str).str.strip()
+            .apply(lambda x: "Assente" if x in ABSENCE_CODES else x)
+        )
 
+    # 4) Ordinamento
     sort_cols = [c for c in DEFAULT_SORT if c in df.columns]
     by = sort_cols.copy()
     if "Cognome e Nome" in df.columns:
         by.append("Cognome e Nome")
     df_sorted = df.sort_values(by=by, kind="mergesort").reset_index(drop=True) if by else df.reset_index(drop=True)
+
     return df_sorted
