@@ -1,6 +1,7 @@
+streamlit>=1.36,<1.39
 pandas==2.2.2
 openpyxl==3.1.5
-xlrd==1.2.0           # per leggere .xls legacy
-streamlit==1.36.0
-reportlab==4.2.2      # per creare PDF
+xlrd==1.2.0          # per i .xls legacy
+reportlab==4.2.2     # PDF (wheel disponibile su py311)
+Pillow==10.3.0       # immagini per reportlab
 python-dateutil==2.9.0.post0
