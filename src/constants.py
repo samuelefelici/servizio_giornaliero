@@ -12,7 +12,7 @@ RESIDENZA_RENAME = {
 DEFAULT_SORT = ["Residenza","Categoria","Turno","Inizio"]  # editabile
 HEADER_PROBE = "Cognome e Nome"
 EXPECTED_COLUMNS = [
-    "Cognome e Nome","Matricola","Categoria","Residenza",
-    "Turno","Inizio","Fine","Indennità e note"
+    "Cognome e Nome","Matricola","Residenza",
+    "Turno","Inizio","Fine","Note"
 ]
 TITLE = "Servizio Giornaliero"
