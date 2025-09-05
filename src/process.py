@@ -9,6 +9,62 @@ from .constants import (
 )
 from .utils import find_header_row, coerce_time, clean_spaces, clean_column_names
 
+import re
+
+_KEYWORDS = [
+    "cognome", "matricola", "categoria", "residenza",
+    "turno", "inizio", "fine", "indennità", "note", "indennita",
+]
+
+_NEWLINE_CHARS = [
+    "\r\n", "\n", "\r",              # classici
+    "\u2028", "\u2029", "\u000b", "\u000c", "\u0085",  # separatori unicode
+    "\u0a0d",                        # visto nel tuo dump KO
+]
+
+def _normalize_newlines(txt: str) -> str:
+    # sostituisci tutto con \n
+    for ch in _NEWLINE_CHARS:
+        txt = txt.replace(ch, "\n")
+    # collassa \n multipli strani
+    txt = re.sub(r"\n{3,}", "\n\n", txt)
+    return txt
+
+def _score_decoded_text(txt: str) -> float:
+    low = txt.lower()
+    # signal: parole chiave
+    kw = sum(1 for k in _KEYWORDS if k in low)
+    # signal: numero righe e tab
+    lines = low.count("\n")
+    tabs = low.count("\t")
+    # signal: quota ASCII stampabile
+    if len(low) > 0:
+        ascii_ok = sum(1 for c in low if (32 <= ord(c) <= 126) or c in "\n\t\r")
+        ascii_ratio = ascii_ok / len(low)
+    else:
+        ascii_ratio = 0.0
+    # pesi empirici
+    return kw * 10 + lines * 0.2 + tabs * 0.5 + ascii_ratio * 3
+
+def _decode_best(raw: bytes) -> tuple[str, str]:
+    """
+    Prova più encoding e sceglie quello con score più alto.
+    Ritorna (testo_decodificato_normalizzato, encoding_usato).
+    """
+    candidates = ["utf-8-sig", "utf-16", "utf-16le", "utf-16be", "cp1252", "utf-8", "latin-1"]
+    best = ("", "latin-1", float("-inf"))
+    for enc in candidates:
+        try:
+            txt = raw.decode(enc, errors="strict")
+        except Exception:
+            continue
+        txt = _normalize_newlines(txt)
+        score = _score_decoded_text(txt)
+        if score > best[2]:
+            best = (txt, enc, score)
+    return best[0], best[1]
+
+
 # ======================= Sniffer / lettura robusta =======================
 
 def _is_zip(b: bytes) -> bool:
