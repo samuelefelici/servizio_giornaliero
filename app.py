@@ -1,6 +1,7 @@
 # app.py
 import os, sys, re, io, tempfile
 from pathlib import Path
+from html import escape as html_escape
 
 # --- Path per import locali ---
 ROOT = Path(__file__).resolve().parent
@@ -114,29 +115,39 @@ def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series) -> str:
     """
     Ritorna HTML della tabella (pandas Styler) a larghezza piena.
     Bold su Turno/Inizio/Fine quando trasferta_mask è True.
+    Nelle Note l'asterisco * forza un a capo.
     """
-    # funzione per righe boldate (subset solo su colonne interessate)
-    subset_cols = [c for c in ["Turno", "Inizio", "Fine"] if c in g_disp.columns]
+    # copia e prepara la colonna Note con <br/> al posto di *
+    df_html = g_disp.copy()
+    note_col = "Indennità e note"
+    if note_col in df_html.columns:
+        df_html[note_col] = (
+            df_html[note_col]
+            .astype(str)
+            .apply(lambda x: html_escape(x).replace("*", "<br/>"))
+        )
+
+    subset_cols = [c for c in ["Turno", "Inizio", "Fine"] if c in df_html.columns]
 
     def _bold_if_trasferta(row):
         return (["font-weight: bold"] * len(row)) if trasferta_mask.loc[row.name] else ([""] * len(row))
 
-    sty = (g_disp.style
+    sty = (df_html.style
            .hide(axis="index")
            .apply(_bold_if_trasferta, axis=1, subset=subset_cols)
            .set_table_styles([
                {"selector": "table", "props": [("width","100%"), ("table-layout","fixed"), ("border-collapse","collapse")]},
                {"selector": "th",    "props": [("background","#f5f5f5"), ("text-align","left"), ("padding","6px")]},
                {"selector": "td",    "props": [("padding","6px"), ("vertical-align","top")]},
-               # centro Inizio/Fine
                {"selector": "th:nth-child(4), td:nth-child(4), th:nth-child(5), td:nth-child(5)",
                 "props": [("text-align","center")]},
-               # colonna Note: wrap e un po' più larga
                {"selector": "th:nth-child(6), td:nth-child(6)",
                 "props": [("width","40%"), ("white-space","normal"), ("word-break","break-word")]}
            ], overwrite=False)
           )
-    return f'<div class="serv-table-wrap">{sty.to_html()}</div>'
+    # escape=False per far rendere i <br/>
+    return f'<div class="serv-table-wrap">{sty.to_html(escape=False)}</div>'
+
 
 # ====================== UI ======================
 
