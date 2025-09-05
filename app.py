@@ -156,3 +156,6 @@ if st.button("▶️ Elabora"):
             )
 
     except Exception as e:
+        import traceback
+        st.error(f"Errore durante l'elaborazione: {e}")
+        st.code("".join(traceback.format_exception(*sys.exc_info())))
