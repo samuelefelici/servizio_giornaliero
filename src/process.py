@@ -94,20 +94,16 @@ def _is_probably_text(b: bytes) -> bool:
 
 def _read_text_table(raw: bytes) -> pd.DataFrame:
     """
-    Legge file testuali (TSV/CSV anche ‘sporchi’) con righe a larghezza variabile:
-    usa csv.reader e fa padding a destra.
+    Legge TSV/CSV anche 'sporchi', con encoding scelto in modo competitivo.
     """
-    # decodifica robusta
-    txt = None
-    for enc in ("utf-16", "utf-8-sig", "cp1252", "utf-8", "latin-1"):
-        try:
-            txt = raw.decode(enc)
-            break
-        except Exception:
-            continue
-    if txt is None:
-        txt = raw.decode("utf-8", errors="replace")
+    txt, used_enc = _decode_best(raw)
 
+    # se in realtà è HTML UTF-16/UTF-8, instrada su parser HTML
+    low = txt.lstrip().lower()
+    if low.startswith("<!doctype html") or low.startswith("<html") or "<table" in low:
+        return _read_html_table_from_text(txt)
+
+    # prova separatori tipici, con padding di colonne
     candidate_seps = ["\t", ";", ",", "|"]
     best_df = None
     for sep in candidate_seps:
@@ -118,12 +114,10 @@ def _read_text_table(raw: bytes) -> pd.DataFrame:
             width = max(len(r) for r in rows)
             if width < 2:
                 continue
-            # pad a destra
             for r in rows:
                 if len(r) < width:
                     r.extend([""] * (width - len(r)))
             df = pd.DataFrame(rows)
-            # euristica: accetta tabelle con almeno 5x5
             if df.shape[1] >= 5 and df.shape[0] >= 5:
                 best_df = df
                 break
@@ -133,17 +127,16 @@ def _read_text_table(raw: bytes) -> pd.DataFrame:
             continue
 
     if best_df is None:
-        # fallback con separatore whitespace
-        df = pd.read_csv(io.StringIO(txt), sep=r"\s+", header=None, dtype=str, keep_default_na=False, engine="python")
-        best_df = df
+        # fallback whitespace
+        best_df = pd.read_csv(io.StringIO(txt), sep=r"\s+", header=None,
+                              dtype=str, keep_default_na=False, engine="python")
     return best_df
 
-def _read_html_table(raw: bytes) -> pd.DataFrame:
-    # richiede lxml nei requirements
-    txt = raw.decode("utf-8", errors="ignore")
+
+def _read_html_table_from_text(txt: str) -> pd.DataFrame:
     tables = pd.read_html(io.StringIO(txt), header=None, flavor="lxml")
-    # prendi la più grande
     return max(tables, key=lambda d: d.shape[0] * d.shape[1])
+
 
 def _read_excel_robusto(file) -> tuple[pd.DataFrame, str]:
     """
@@ -187,14 +180,26 @@ def _read_excel_robusto(file) -> tuple[pd.DataFrame, str]:
     if _is_zip(raw):
         return pd.read_excel(io.BytesIO(raw), header=None, engine="openpyxl"), "xlsx-zip"
     if _is_html(raw):
-        return _read_html_table(raw), "html"
+        # HTML in ASCII/UTF-8
+        txt, _ = _decode_best(raw)
+        return _read_html_table_from_text(txt), "html"
+
     if _is_xml_spreadsheetml(raw):
+        # spesso è HTML/XML salvato "strano"
+        txt, _ = _decode_best(raw)
         try:
-            return _read_html_table(raw), "html"
+            return _read_html_table_from_text(txt), "html"
         except Exception:
             return _read_text_table(raw), "xml"
+
     if _is_probably_text(raw):
+        # può essere TSV/CSV/HTML in UTF-16/CP1252 ecc.
+        txt, _ = _decode_best(raw)
+        low = txt.lstrip().lower()
+        if low.startswith("<!doctype html") or low.startswith("<html") or "<table" in low:
+            return _read_html_table_from_text(txt), "html"
         return _read_text_table(raw), "text"
+
 
     # 4) tentativi finali
     for eng, tag in (("openpyxl", "xlsx-zip"), ("xlrd", "xls-ole")):
