@@ -184,30 +184,47 @@ def parse_date_and_day(df_raw: pd.DataFrame) -> tuple[str, str]:
 
 def read_input_excel(file) -> tuple[pd.DataFrame, dict]:
     """
-    Legge il file, pulisce spazi/NBSP, trova l'intestazione,
-    seleziona le colonne attese, rimuove righe vuote, normalizza orari.
+    Legge il file, pulisce spazi/NBSP, trova l'intestazione in modo robusto,
+    seleziona le colonne attese, elimina righe vuote e normalizza orari.
+    Gestisce lo schema fisso: vuota, (data,giorno), header, vuota, dati.
     """
     df_raw, origine = _read_excel_robusto(file)
 
-    # Pulizia preliminare (trim su stringhe e NBSP)
+    # Pulizia preliminare (trim su celle stringa + NBSP)
     df_raw = clean_spaces(df_raw)
 
-    # Meta (data e giorno) dalle prime righe
+    # Meta (data/giorno) dalla prima riga non vuota
     date_str, day_str = parse_date_and_day(df_raw)
 
-    # Trova la riga di intestazione (es. "Cognome e Nome")
+    # Trova la riga di intestazione: prima prova con il probe letterale, poi fallback robusto
     hdr_row = find_header_row(df_raw, HEADER_PROBE)
+    if hdr_row is None:
+        hdr_row = _find_header_row_robusto(df_raw, EXPECTED_COLUMNS)
     if hdr_row is None:
         raise ValueError(f"Intestazione '{HEADER_PROBE}' non trovata.")
 
-    # Prendi tutte le colonne dall'header in poi
-    df = df_raw.iloc[hdr_row:, :].copy()
-    # Nomi colonna ripuliti
-    df.columns = clean_column_names(df.iloc[0].tolist())
-    # Rimuove la riga header duplicata
-    df = df.iloc[1:].reset_index(drop=True)
+    # Header canonico
+    raw_cols = df_raw.iloc[hdr_row].tolist()
+    canon_cols = _canonicalize_header(clean_column_names(raw_cols))
 
-    # Tieni solo le colonne attese che esistono davvero
+    # Dati a partire dalla riga successiva all'header
+    df = df_raw.iloc[hdr_row + 1:, :len(canon_cols)].copy()
+    df.columns = canon_cols
+
+    # Se la PRIMA riga dei dati è vuota (schema fisso), saltala
+    def _row_is_empty(row) -> bool:
+        for v in row:
+            if pd.isna(v):
+                continue
+            if isinstance(v, str) and v.strip() == "":
+                continue
+            return False
+        return True
+
+    while len(df) and _row_is_empty(df.iloc[0]):
+        df = df.iloc[1:].reset_index(drop=True)
+
+    # Mantieni solo le colonne attese presenti
     keep_cols = [c for c in EXPECTED_COLUMNS if c in df.columns]
     if not keep_cols:
         raise ValueError(
@@ -217,8 +234,22 @@ def read_input_excel(file) -> tuple[pd.DataFrame, dict]:
         )
     df = df[keep_cols].copy()
 
-    # Pulizia finale su celle stringa
+    # Pulizia finale e rimozione TUTTE le righe completamente vuote
     df = clean_spaces(df)
+    if len(df):
+        df = df[~df.apply(_row_is_empty, axis=1)].reset_index(drop=True)
+
+    # Tipizzazioni / orari
+    if "Matricola" in df.columns:
+        df["Matricola"] = df["Matricola"].astype(str).str.strip()
+    if "Inizio" in df.columns:
+        df["Inizio"] = coerce_time(df["Inizio"])
+    if "Fine" in df.columns:
+        df["Fine"] = coerce_time(df["Fine"])
+
+    meta = {"data": date_str, "giorno": day_str, "origine": origine}
+    return df, meta
+
 
     # ✅ Elimina righe completamente vuote sulle colonne utili
     def _row_is_empty(row) -> bool:
