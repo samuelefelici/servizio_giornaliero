@@ -10,6 +10,9 @@ import re
 
 from .constants import DISPLAY_ORDER
 
+# riposi: non vanno in grassetto
+REST_CODES = {"R", "RR"}
+
 # ---------- helper prefissi deposito/turno ----------
 def _res_to_prefix(res: str) -> str | None:
     if not isinstance(res, str): return None
@@ -27,27 +30,47 @@ def _res_to_prefix(res: str) -> str | None:
     return None
 
 def _turno_bucket(turno: str) -> str | None:
+    """
+    'JU…' -> 'JU' ; 'J…' (non JU) -> 'J' ; altri -> prima lettera.
+    Esclude 'ASSENTE' e riposi R/RR (ritorna None).
+    """
     if not isinstance(turno, str): turno = str(turno)
-    s = turno.strip()
-    if not s or s.upper() == "ASSENTE": return None
-    m = re.match(r"[A-Za-z]+", s)
+    s = turno.strip().upper()
+    if not s or s == "ASSENTE" or s in REST_CODES:
+        return None
+    m = re.match(r"[A-Z]+", s)
     if not m: return None
-    up = m.group(0).upper()
+    up = m.group(0)
     if up.startswith("JU"): return "JU"
     if up.startswith("J"):  return "J"
     return up[0]
 
 def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
+    # J e JU sono equivalenti
     if prefix in ("J", "JU"): return {"J", "JU"}
     return {prefix} if prefix else set()
 
 def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
+    """
+    True per le righe in 'trasferta': bucket turno NON appartiene ai prefissi accettati
+    per la residenza. Esclude ASSENTE e R/RR.
+    """
     if "Residenza" not in df.columns or "Turno" not in df.columns:
         return pd.Series(False, index=df.index)
-    expected = df["Residenza"].apply(_res_to_prefix)
-    actual   = df["Turno"].astype(str).apply(_turno_bucket)
-    ok = expected.apply(_accepted_prefixes_for_res)
-    return expected.notna() & actual.notna() & (~ok.apply(lambda s: actual.iloc[s.name] in s))
+
+    expected = df["Residenza"].apply(_res_to_prefix)            # Series[str|None]
+    actual   = df["Turno"].apply(_turno_bucket)                 # Series[str|None] (None se Assente/R/RR)
+    accepted = expected.map(_accepted_prefixes_for_res)         # Series[set]
+
+    # membership vettoriale: a in acc (con gestione None)
+    in_home = pd.Series(
+        [(a is not None) and (acc is not None) and (a in acc)
+         for a, acc in zip(actual, accepted)],
+        index=df.index
+    )
+
+    # trasferta = valori validi & non in-home
+    return actual.notna() & expected.notna() & (~in_home)
 
 # ---------- shaping tabella ----------
 def _collapse_repeats(gdf: pd.DataFrame,
@@ -73,11 +96,9 @@ def _table_data_for(df: pd.DataFrame):
 
 def _col_widths(header: list[str], avail_width: float) -> list[float]:
     """
-    Usa tutta la larghezza disponibile del foglio.
-    Tutte le colonne hanno larghezza fissa tranne 'Indennità e note' che prende il resto.
-    Se manca 'Indennità e note', si ripartisce proporzionalmente.
+    Usa tutta la larghezza disponibile. Tutte le colonne hanno larghezza fissa
+    tranne 'Indennità e note'/'Note' che prende lo spazio residuo.
     """
-    # fissi (puoi ritoccarli)
     FIXED = {
         "Matricola": 22*mm,
         "Cognome e Nome": 62*mm,
@@ -86,7 +107,6 @@ def _col_widths(header: list[str], avail_width: float) -> list[float]:
         "Fine": 18*mm,
     }
     NOTE_NAMES = {"Indennità e note", "Note"}
-
     fixed_sum = sum(FIXED.get(h, 0) for h in header if h not in NOTE_NAMES)
     has_note = any(h in NOTE_NAMES for h in header)
 
@@ -94,31 +114,23 @@ def _col_widths(header: list[str], avail_width: float) -> list[float]:
     if has_note:
         min_note = 30*mm
         if fixed_sum > max(0, avail_width - min_note) and fixed_sum > 0:
-            # scala i fissi per lasciare almeno min_note alle note
             scale = (avail_width - min_note) / fixed_sum
             for h in header:
-                if h in NOTE_NAMES:
-                    widths.append(min_note)  # placeholder; aggiustiamo dopo
-                else:
-                    widths.append(FIXED.get(h, 18*mm) * scale)
-            # ricalcola resto per la colonna Note (tutta la parte rimanente)
+                widths.append(min_note if h in NOTE_NAMES else FIXED.get(h, 18*mm) * scale)
             used = sum(w for h, w in zip(header, widths) if h not in NOTE_NAMES)
             note_w = max(min_note, avail_width - used)
             widths = [note_w if h in NOTE_NAMES else w for h, w in zip(header, widths)]
         else:
-            # fissi come da mappa, resto alla colonna Note
             used = sum(FIXED.get(h, 18*mm) for h in header if h not in NOTE_NAMES)
             note_w = max(min_note, avail_width - used)
             for h in header:
                 widths.append(note_w if h in NOTE_NAMES else FIXED.get(h, 18*mm))
     else:
-        # nessuna colonna note: ripartizione proporzionale
         if fixed_sum == 0:
             widths = [avail_width/len(header)]*len(header)
         else:
             for h in header:
-                w = FIXED.get(h, 18*mm) / fixed_sum * avail_width
-                widths.append(w)
+                widths.append(FIXED.get(h, 18*mm) / fixed_sum * avail_width)
     return widths
 
 # ---------- build PDF ----------
@@ -137,14 +149,12 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
 
     elems = []
 
-    # Intestazione
     header_text = f"{title} — {meta.get('data','')} — {meta.get('giorno','')}"
     elems.append(Paragraph(header_text, title_style))
 
     if logo_path and logo_path.exists():
         elems.append(Spacer(1, 2*mm))
-        img = Image(str(logo_path))
-        img._restrictSize(40*mm, 15*mm)
+        img = Image(str(logo_path)); img._restrictSize(40*mm, 15*mm)
         elems.append(img)
 
     # Grouping per Residenza
@@ -156,7 +166,7 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
 
     first_block = True
     for res_name, gdf in blocks:
-        # Ordinamento interno
+        # sort interno
         if inner_sort == "inizio" and "Inizio" in gdf.columns:
             by = ["Inizio"] + (["Cognome e Nome"] if "Cognome e Nome" in gdf.columns else [])
             gdf = gdf.sort_values(by=by).reset_index(drop=True)
@@ -165,8 +175,9 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
             if "Cognome e Nome" in gdf.columns: by.append("Cognome e Nome")
             if "Inizio" in gdf.columns:         by.append("Inizio")
             if by: gdf = gdf.sort_values(by=by).reset_index(drop=True)
-            gdf = _collapse_repeats(gdf, key_cols=("Cognome e Nome", "Matricola"),
-                                    collapse_cols=("Cognome e Nome", "Matricola"))
+            gdf = _collapse_repeats(gdf,
+                                    key_cols=("Cognome e Nome","Matricola"),
+                                    collapse_cols=("Cognome e Nome","Matricola"))
 
         trasferte = _trasferta_mask(gdf)
 
@@ -174,25 +185,20 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
             elems.append(Spacer(1, 3*mm))
         first_block = False
 
-        # Titolo gruppo
         elems.append(Paragraph(res_name, group_style))
 
-        # Tabella dati
         data = _table_data_for(gdf)
         header = data[0]
 
-        # col widths: usa tutta la riga; solo "Indennità e note" si adatta
         avail_width = A4[0] - doc.leftMargin - doc.rightMargin
         col_widths = _col_widths(header, avail_width)
 
-        # Indici dinamici per colonne interessate
         col_idx = {name: header.index(name) for name in ["Turno", "Inizio", "Fine"] if name in header}
         idx_inizio = col_idx.get("Inizio")
         idx_fine   = col_idx.get("Fine")
 
         tbl = Table(data, repeatRows=1, colWidths=col_widths)
 
-        # Stile base
         base_style = [
             ("GRID",       (0, 0), (-1, -1), 0.25, colors.grey),
             ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
@@ -204,8 +210,8 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
         if idx_fine is not None:
             base_style.append(("ALIGN", (idx_fine, 1), (idx_fine, -1), "CENTER"))
 
-        # Grassetto per trasferte solo su Turno/Inizio/Fine
-        for i, is_tr in enumerate(trasferte.tolist(), start=1):  # +1 per saltare l'header
+        # Bold per trasferte solo su Turno/Inizio/Fine
+        for i, is_tr in enumerate(trasferte.tolist(), start=1):
             if not is_tr: continue
             for cidx in col_idx.values():
                 base_style.append(("FONTNAME", (cidx, i), (cidx, i), "Helvetica-Bold"))
