@@ -10,11 +10,11 @@ if str(ROOT) not in sys.path:
 import streamlit as st
 import pandas as pd
 
-REST_CODES = {"R", "RR"}
+REST_CODES = {"R", "RR"}  # riposo: non va in bold
 
 # --- Import moduli del progetto (con gestione errore) ---
 try:
-    from src.process import read_input_excel, transform_dataframe, debug_probe  # debug_probe opzionale
+    from src.process import read_input_excel, transform_dataframe, debug_probe  # debug opzionale
     from src.pdf_export import build_pdf
     from src.constants import TITLE, DISPLAY_ORDER
 except Exception as e:
@@ -46,26 +46,16 @@ def _res_to_prefix(res: str) -> str | None:
     if not isinstance(res, str):
         return None
     r = res.upper().replace("_", " ")
-    if "JESI URBANO" in r or r.strip() == "JU":
-        return "JU"
-    if "JESI" in r or r.strip() == "J":
-        return "J"
-    if "MARINA" in r or r.strip() == "M":
-        return "M"
-    if "CASTELFIDARDO" in r or "C.FID" in r or r.strip() == "C":
-        return "C"
-    if "OSIMO" in r or r.strip() == "O":
-        return "O"
-    if "FILOTTRANO" in r or "FILOT" in r or r.strip() == "F":
-        return "F"
-    if "POLVERIGI" in r or r.strip() == "P":
-        return "P"
-    if "OSTRA" in r or r.strip() == "D":
-        return "D"
-    if "BELVED" in r or r.strip() == "B" or "DEPBELVE" in r:
-        return "B"
-    if "ANCONA" in r or r.strip() == "A":
-        return "A"
+    if "JESI URBANO" in r or r.strip() == "JU": return "JU"
+    if "JESI" in r or r.strip() == "J":       return "J"
+    if "MARINA" in r or r.strip() == "M":     return "M"
+    if "CASTELFIDARDO" in r or "C.FID" in r or r.strip() == "C": return "C"
+    if "OSIMO" in r or r.strip() == "O":      return "O"
+    if "FILOTTRANO" in r or "FILOT" in r or r.strip() == "F":    return "F"
+    if "POLVERIGI" in r or r.strip() == "P":  return "P"
+    if "OSTRA" in r or r.strip() == "D":      return "D"
+    if "BELVED" in r or r.strip() == "B" or "DEPBELVE" in r:     return "B"
+    if "ANCONA" in r or r.strip() == "A":     return "A"
     return None
 
 def _turno_bucket(turno: str) -> str | None:
@@ -74,6 +64,7 @@ def _turno_bucket(turno: str) -> str | None:
       - 'JU…' -> 'JU'
       - 'J…' (non JU) -> 'J'
       - altrimenti prima lettera (M, C, O, F, P, D, A, B…)
+      - esclude 'Assente' e R/RR
     """
     if not isinstance(turno, str):
         turno = str(turno)
@@ -84,11 +75,9 @@ def _turno_bucket(turno: str) -> str | None:
     if not m:
         return None
     up = m.group(0).upper()
-    if up.startswith("JU"):
-        return "JU"
-    if up.startswith("J"):
-        return "J"
-    return up[0]  # prima lettera per gli altri depositi
+    if up.startswith("JU"): return "JU"
+    if up.startswith("J"):  return "J"
+    return up[0]
 
 def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
     """Prefissi considerati 'di casa' per la residenza (J e JU sono equivalenti)."""
@@ -112,6 +101,46 @@ def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
         return tb not in _accepted_prefixes_for_res(rp)
 
     return df.apply(_is_trasferta, axis=1)
+
+# ---- Styled HTML per anteprima full-width con grassetto su trasferte ----
+
+def _style_bold_subset(df_disp: pd.DataFrame, mask: pd.Series, subset_cols: list[str]) -> str:
+    """
+    Ritorna HTML di una tabella:
+      - indice nascosto
+      - larghezza 100%
+      - grassetto solo su colonne subset per le righe in trasferta (mask=True)
+    """
+    mask = mask.reindex(df_disp.index).fillna(False)
+
+    def _bold_if_trasferta(row):
+        return ["font-weight: bold"] * len(row) if mask.loc[row.name] else [""] * len(row)
+
+    sty = df_disp.style.apply(_bold_if_trasferta, axis=1, subset=subset_cols)
+    # nascondi indice (compatibilità con versioni pandas diverse)
+    try:
+        sty = sty.hide(axis="index")
+    except Exception:
+        try:
+            sty = sty.hide_index()
+        except Exception:
+            pass
+
+    sty = sty.set_table_styles([
+        {"selector": "table",      "props": [("width", "100%"), ("border-collapse", "collapse")]},
+        {"selector": "th, td",     "props": [("border", "1px solid #e6e6e6"), ("padding", "6px 8px")]},
+        {"selector": "thead th",   "props": [("background-color", "#f7f7f7"), ("font-weight", "600")]},
+    ], overwrite=False)
+
+    return sty.to_html()
+
+def _show_styled_table(df_disp: pd.DataFrame, mask: pd.Series):
+    subset_cols = [c for c in ["Turno", "Inizio", "Fine"] if c in df_disp.columns]
+    if not subset_cols:
+        st.dataframe(df_disp, use_container_width=True, hide_index=True)
+        return
+    html = _style_bold_subset(df_disp, mask, subset_cols)
+    st.markdown(f"<div style='width:100%; overflow-x:auto'>{html}</div>", unsafe_allow_html=True)
 
 # ====================== UI ======================
 
@@ -141,7 +170,7 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
         st.warning("Carica prima un file.")
         st.stop()
 
-    # Debug opzionale (si esegue su stream; la nostra lettura fa seek(0) quindi va bene)
+    # Debug opzionale (si esegue su stream; la nostra lettura fa seek(0))
     if debug_mode:
         try:
             info = debug_probe(uploaded)
@@ -207,19 +236,14 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
 
                 # Bold per trasferte: calcolo sulla tabella originale 'g' (indici allineati)
                 mask = _trasferta_mask(g)
-                subset_cols = [c for c in ["Turno", "Inizio", "Fine"] if c in g_disp.columns]
 
-                if subset_cols:
-                    def _bold_if_trasferta(row):
-                        return (["font-weight: bold"] * len(row)) if mask.loc[row.name] else ([""] * len(row))
-
-                    styled = g_disp.style.apply(_bold_if_trasferta, axis=1, subset=subset_cols)
-                    st.write(styled)
-                else:
-                    st.dataframe(g_disp, use_container_width=True, hide_index=True)
+                # ✅ anteprima wide + bold nelle celle Turno/Inizio/Fine per trasferte
+                _show_styled_table(g_disp, mask)
         else:
-            # Nessuna Residenza: mostra tabella piatta
-            st.dataframe(_reorder_for_display(df_view), use_container_width=True, hide_index=True)
+            # Nessuna Residenza: mostra tabella piatta (bold trasferte se possibile)
+            g_disp = _reorder_for_display(df_view)
+            mask = _trasferta_mask(df_view)
+            _show_styled_table(g_disp, mask)
 
         # --- Export Excel (ordine colonne, filtro Assente applicato) ---
         xls_buf = io.BytesIO()
@@ -232,7 +256,7 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-        # --- Export PDF (stessa logica, il grassetto per trasferte è gestito in pdf_export.py) ---
+        # --- Export PDF (stessa logica; bold trasferte gestito in pdf_export.py) ---
         with tempfile.TemporaryDirectory() as td:
             pdf_path = Path(td) / "ServizioGiornaliero.pdf"
             inner_sort = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
