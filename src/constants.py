@@ -11,6 +11,7 @@ RESIDENZA_RENAME = {
     "JESI_URBANO": "JESI URBANO",
     "DepPolverigi": "POLVERIGI",
     "DepBelvede": "BELVEDERE",
+    "DEPCROMOIE": "MOIE",
     
 }
 
