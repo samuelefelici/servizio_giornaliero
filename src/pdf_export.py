@@ -94,7 +94,7 @@ def _table_data_for(df: pd.DataFrame, para_style: ParagraphStyle):
     # trasforma "Indennità e note" in Paragraph per andare a capo
     if "Indennità e note" in header:
         idx_note = header.index("Indennità e note")
-         for r in rows:
+        for r in rows:
             txt = str(r[idx_note])
             txt = escape(txt).replace("*", "<br/>")   # prima escape, poi inserisco <br/>
             r[idx_note] = Paragraph(txt, para_style)
