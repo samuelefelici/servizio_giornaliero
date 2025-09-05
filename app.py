@@ -37,11 +37,18 @@ with col1:
         horizontal=True,
         index=0
     )
+debug_mode = st.checkbox("🧪 Modalità debug", value=False)
 
 if st.button("▶️ Elabora"):
     if not uploaded:
         st.warning("Carica prima un file.")
         st.stop()
+if debug_mode:
+    from src.process import debug_probe
+    info = debug_probe(uploaded)
+    with st.expander("Dettagli debug (header/sniffer)"):
+        st.json(info)
+
 
     try:
         df, meta = read_input_excel(uploaded)
