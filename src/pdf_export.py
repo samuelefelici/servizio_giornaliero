@@ -8,86 +8,53 @@ import pandas as pd
 from pathlib import Path
 import re
 
-from .constants import DISPLAY_ORDER  # Matricola, Cognome e Nome, Turno, Inizio, Fine, Indennità e note
-
-REST_CODES = {"R", "RR"}  # turni di riposo: mai in grassetto
+from .constants import DISPLAY_ORDER
 
 # ---------- helper prefissi deposito/turno ----------
 def _res_to_prefix(res: str) -> str | None:
-    """Mappa il testo della residenza a un prefisso 'atteso' (J e JU sono famigliari)."""
-    if not isinstance(res, str):
-        return None
+    if not isinstance(res, str): return None
     r = res.upper().replace("_", " ").strip()
     if "JESI URBANO" in r or r == "JU": return "JU"
-    if "JESI" in r or r == "J":         return "J"
-    if "MARINA" in r or r == "M":       return "M"
+    if "JESI" in r or r == "J":       return "J"
+    if "MARINA" in r or r == "M":     return "M"
     if "CASTELFIDARDO" in r or "C.FID" in r or r == "C": return "C"
-    if "OSIMO" in r or r == "O":        return "O"
+    if "OSIMO" in r or r == "O":      return "O"
     if "FILOTTRANO" in r or "FILOT" in r or r == "F":    return "F"
-    if "POLVERIGI" in r or r == "P":    return "P"
-    if "OSTRA" in r or r == "D":        return "D"
+    if "POLVERIGI" in r or r == "P":  return "P"
+    if "OSTRA" in r or r == "D":      return "D"
     if "BELVED" in r or r == "B" or "DEPBELVE" in r:     return "B"
-    if "ANCONA" in r or r == "A":       return "A"
+    if "ANCONA" in r or r == "A":     return "A"
     return None
 
 def _turno_bucket(turno: str) -> str | None:
-    """
-    Riduce il codice turno a un 'bucket' per confronto:
-      - 'JU…' -> 'JU'
-      - 'J…'  (non JU) -> 'J'
-      - altri -> prima lettera (M, C, O, F, P, D, A, B…)
-    Esclude 'Assente' e i riposi R/RR.
-    """
-    if not isinstance(turno, str):
-        turno = str(turno)
+    if not isinstance(turno, str): turno = str(turno)
     s = turno.strip()
-    if not s:
-        return None
-    up_full = s.upper()
-    if up_full == "ASSENTE" or up_full in REST_CODES:
-        return None
+    if not s or s.upper() == "ASSENTE": return None
     m = re.match(r"[A-Za-z]+", s)
-    if not m:
-        return None
+    if not m: return None
     up = m.group(0).upper()
     if up.startswith("JU"): return "JU"
     if up.startswith("J"):  return "J"
     return up[0]
 
 def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
-    """Prefissi considerati 'di casa' per la residenza (J e JU sono equivalenti)."""
-    if prefix in ("J", "JU"):
-        return {"J", "JU"}
+    if prefix in ("J", "JU"): return {"J", "JU"}
     return {prefix} if prefix else set()
 
 def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
-    """
-    True se la riga è in 'trasferta' (turno non appartiene ai prefissi accettati).
-    Considera J e JU equivalenti; esclude 'Assente' e R/RR.
-    """
     if "Residenza" not in df.columns or "Turno" not in df.columns:
         return pd.Series(False, index=df.index)
-
-    def _is_trasferta(row) -> bool:
-        turn = str(row["Turno"]).strip().upper()
-        if turn in REST_CODES or turn == "ASSENTE":
-            return False
-        rp = _res_to_prefix(row["Residenza"])
-        tb = _turno_bucket(row["Turno"])
-        if rp is None or tb is None:
-            return False
-        return tb not in _accepted_prefixes_for_res(rp)
-
-    return df.apply(_is_trasferta, axis=1)
+    expected = df["Residenza"].apply(_res_to_prefix)
+    actual   = df["Turno"].astype(str).apply(_turno_bucket)
+    ok = expected.apply(_accepted_prefixes_for_res)
+    return expected.notna() & actual.notna() & (~ok.apply(lambda s: actual.iloc[s.name] in s))
 
 # ---------- shaping tabella ----------
 def _collapse_repeats(gdf: pd.DataFrame,
                       key_cols=("Cognome e Nome", "Matricola"),
                       collapse_cols=("Cognome e Nome", "Matricola")) -> pd.DataFrame:
-    """Sui record consecutivi della stessa persona azzera i campi ripetitivi."""
     missing = [c for c in key_cols if c not in gdf.columns]
-    if missing:
-        return gdf
+    if missing: return gdf
     g = gdf.copy()
     dup_mask = (g[list(key_cols)] == g[list(key_cols)].shift(1)).all(axis=1)
     for c in collapse_cols:
@@ -96,27 +63,68 @@ def _collapse_repeats(gdf: pd.DataFrame,
     return g
 
 def _table_data_for(df: pd.DataFrame):
-    """Applica DISPLAY_ORDER e rimuove 'Residenza' se presente."""
     cols = [c for c in DISPLAY_ORDER if c in df.columns]
     dfp = df.copy()
-    if cols:
-        dfp = dfp[cols]
+    if cols: dfp = dfp[cols]
     dfp = dfp.drop(columns=["Residenza"], errors="ignore")
-    header = list(dfp.columns)  # manteniamo "Indennità e note"
+    header = list(dfp.columns)
     rows = dfp.fillna("").values.tolist()
     return [header] + rows
+
+def _col_widths(header: list[str], avail_width: float) -> list[float]:
+    """
+    Usa tutta la larghezza disponibile del foglio.
+    Tutte le colonne hanno larghezza fissa tranne 'Indennità e note' che prende il resto.
+    Se manca 'Indennità e note', si ripartisce proporzionalmente.
+    """
+    # fissi (puoi ritoccarli)
+    FIXED = {
+        "Matricola": 22*mm,
+        "Cognome e Nome": 62*mm,
+        "Turno": 24*mm,
+        "Inizio": 18*mm,
+        "Fine": 18*mm,
+    }
+    NOTE_NAMES = {"Indennità e note", "Note"}
+
+    fixed_sum = sum(FIXED.get(h, 0) for h in header if h not in NOTE_NAMES)
+    has_note = any(h in NOTE_NAMES for h in header)
+
+    widths = []
+    if has_note:
+        min_note = 30*mm
+        if fixed_sum > max(0, avail_width - min_note) and fixed_sum > 0:
+            # scala i fissi per lasciare almeno min_note alle note
+            scale = (avail_width - min_note) / fixed_sum
+            for h in header:
+                if h in NOTE_NAMES:
+                    widths.append(min_note)  # placeholder; aggiustiamo dopo
+                else:
+                    widths.append(FIXED.get(h, 18*mm) * scale)
+            # ricalcola resto per la colonna Note (tutta la parte rimanente)
+            used = sum(w for h, w in zip(header, widths) if h not in NOTE_NAMES)
+            note_w = max(min_note, avail_width - used)
+            widths = [note_w if h in NOTE_NAMES else w for h, w in zip(header, widths)]
+        else:
+            # fissi come da mappa, resto alla colonna Note
+            used = sum(FIXED.get(h, 18*mm) for h in header if h not in NOTE_NAMES)
+            note_w = max(min_note, avail_width - used)
+            for h in header:
+                widths.append(note_w if h in NOTE_NAMES else FIXED.get(h, 18*mm))
+    else:
+        # nessuna colonna note: ripartizione proporzionale
+        if fixed_sum == 0:
+            widths = [avail_width/len(header)]*len(header)
+        else:
+            for h in header:
+                w = FIXED.get(h, 18*mm) / fixed_sum * avail_width
+                widths.append(w)
+    return widths
 
 # ---------- build PDF ----------
 def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
               logo_path: Path | None = None, title: str = "Servizio Giornaliero",
               inner_sort: str = "nome"):
-    """
-    Crea un PDF raggruppato per Residenza.
-    - Titolo compatto in alto
-    - Per ogni Residenza: titolo gruppo e tabella (senza colonna Residenza)
-    - inner_sort: "nome" (A→Z + Inizio come tie-breaker) oppure "inizio"
-    - Trasferte: celle Turno/Inizio/Fine in grassetto.
-    """
     doc = SimpleDocTemplate(
         str(path_out), pagesize=A4,
         rightMargin=10*mm, leftMargin=10*mm,
@@ -154,19 +162,12 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
             gdf = gdf.sort_values(by=by).reset_index(drop=True)
         else:
             by = []
-            if "Cognome e Nome" in gdf.columns:
-                by.append("Cognome e Nome")
-            if "Inizio" in gdf.columns:
-                by.append("Inizio")
-            if by:
-                gdf = gdf.sort_values(by=by).reset_index(drop=True)
-            gdf = _collapse_repeats(
-                gdf,
-                key_cols=("Cognome e Nome", "Matricola"),
-                collapse_cols=("Cognome e Nome", "Matricola")
-            )
+            if "Cognome e Nome" in gdf.columns: by.append("Cognome e Nome")
+            if "Inizio" in gdf.columns:         by.append("Inizio")
+            if by: gdf = gdf.sort_values(by=by).reset_index(drop=True)
+            gdf = _collapse_repeats(gdf, key_cols=("Cognome e Nome", "Matricola"),
+                                    collapse_cols=("Cognome e Nome", "Matricola"))
 
-        # Maschera trasferte (sull’ordine definitivo del gruppo)
         trasferte = _trasferta_mask(gdf)
 
         if not first_block:
@@ -180,12 +181,16 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
         data = _table_data_for(gdf)
         header = data[0]
 
+        # col widths: usa tutta la riga; solo "Indennità e note" si adatta
+        avail_width = A4[0] - doc.leftMargin - doc.rightMargin
+        col_widths = _col_widths(header, avail_width)
+
         # Indici dinamici per colonne interessate
         col_idx = {name: header.index(name) for name in ["Turno", "Inizio", "Fine"] if name in header}
         idx_inizio = col_idx.get("Inizio")
         idx_fine   = col_idx.get("Fine")
 
-        tbl = Table(data, repeatRows=1)
+        tbl = Table(data, repeatRows=1, colWidths=col_widths)
 
         # Stile base
         base_style = [
@@ -194,7 +199,6 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
             ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
             ("VALIGN",     (0, 0), (-1, -1), "TOP"),
         ]
-        # Allineamento Inizio/Fine al centro se presenti
         if idx_inizio is not None:
             base_style.append(("ALIGN", (idx_inizio, 1), (idx_inizio, -1), "CENTER"))
         if idx_fine is not None:
@@ -202,8 +206,7 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
 
         # Grassetto per trasferte solo su Turno/Inizio/Fine
         for i, is_tr in enumerate(trasferte.tolist(), start=1):  # +1 per saltare l'header
-            if not is_tr:
-                continue
+            if not is_tr: continue
             for cidx in col_idx.values():
                 base_style.append(("FONTNAME", (cidx, i), (cidx, i), "Helvetica-Bold"))
 
