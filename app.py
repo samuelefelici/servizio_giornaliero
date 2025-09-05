@@ -10,11 +10,11 @@ if str(ROOT) not in sys.path:
 import streamlit as st
 import pandas as pd
 
-REST_CODES = {"R", "RR"}  # riposo: non va in bold
+REST_CODES = {"R", "RR"}   # riposo
 
 # --- Import moduli del progetto (con gestione errore) ---
 try:
-    from src.process import read_input_excel, transform_dataframe, debug_probe  # debug opzionale
+    from src.process import read_input_excel, transform_dataframe, debug_probe
     from src.pdf_export import build_pdf
     from src.constants import TITLE, DISPLAY_ORDER
 except Exception as e:
@@ -26,54 +26,59 @@ except Exception as e:
 
 # --- Config pagina ---
 st.set_page_config(page_title="Servizio Giornaliero", layout="wide")
-# forza il container principale a occupare tutta la viewport
+
+# CSS: contenitore a tutta larghezza e stile tabelle HTML (pandas Styler)
 st.markdown("""
 <style>
-  .block-container { max-width: 100% !important; padding-left: 24px; padding-right: 24px; }
+.block-container {max-width: 100% !important; padding-left: 16px; padding-right: 16px;}
+.serv-table-wrap {width: 100%;}
+.serv-table-wrap table {width: 100% !important; table-layout: fixed; border-collapse: collapse;}
+.serv-table-wrap th {background:#f5f5f5; text-align:left; padding:6px;}
+.serv-table-wrap td {padding:6px; vertical-align: top;}
+/* centro le colonne 4 e 5 (Inizio/Fine) */
+.serv-table-wrap th:nth-child(4), .serv-table-wrap td:nth-child(4),
+.serv-table-wrap th:nth-child(5), .serv-table-wrap td:nth-child(5) {text-align:center;}
+/* colonna Note: usa il resto della larghezza e va a capo */
+.serv-table-wrap th:nth-child(6), .serv-table-wrap td:nth-child(6) {
+  width: 40%; white-space: normal; word-break: break-word;
+}
 </style>
 """, unsafe_allow_html=True)
 
 st.title("📋 Servizio Giornaliero – ExtraUrbano (Python)")
 st.caption("Drag & drop del file Excel (.xls/.xlsx), pulizia automatica, anteprima e export PDF/Excel (raggruppato per deposito).")
 
-cfg_dir = Path("config")
-assets_dir = Path("assets")
+cfg_dir   = Path("config")
+assets_dir= Path("assets")
 logo_path = assets_dir / "logo.jpg"
 
 # ====================== Helper ======================
 
 def _reorder_for_display(df: pd.DataFrame) -> pd.DataFrame:
-    """Ordina colonne secondo DISPLAY_ORDER e nasconde 'Residenza' nella vista/export."""
-    df2 = df.drop(columns=["Residenza"], errors="ignore").copy()
+    """Ordina colonne secondo DISPLAY_ORDER e nasconde 'Residenza'."""
+    df2  = df.drop(columns=["Residenza"], errors="ignore").copy()
     cols = [c for c in DISPLAY_ORDER if c in df2.columns]
     return df2[cols] if cols else df2
 
 def _res_to_prefix(res: str) -> str | None:
-    """Mappa la residenza a un prefisso atteso (JU o J sono famigliari)."""
+    """Mappa residenza a prefisso atteso (J e JU considerate ‘di casa’ insieme)."""
     if not isinstance(res, str): return None
-    r = res.upper().replace("_", " ")
-    if "JESI URBANO" in r or r.strip() == "JU": return "JU"
-    if "JESI" in r or r.strip() == "J":       return "J"
-    if "MARINA" in r or r.strip() == "M":     return "M"
-    if "CASTELFIDARDO" in r or "C.FID" in r or r.strip() == "C": return "C"
-    if "OSIMO" in r or r.strip() == "O":      return "O"
-    if "FILOTTRANO" in r or "FILOT" in r or r.strip() == "F":    return "F"
-    if "POLVERIGI" in r or r.strip() == "P":  return "P"
-    if "OSTRA" in r or r.strip() == "D":      return "D"
-    if "BELVED" in r or r.strip() == "B" or "DEPBELVE" in r:     return "B"
-    if "ANCONA" in r or r.strip() == "A":     return "A"
+    r = res.upper().replace("_", " ").strip()
+    if "JESI URBANO" in r or r == "JU": return "JU"
+    if "JESI" in r or r == "J":       return "J"
+    if "MARINA" in r or r == "M":     return "M"
+    if "CASTELFIDARDO" in r or "C.FID" in r or r == "C": return "C"
+    if "OSIMO" in r or r == "O":      return "O"
+    if "FILOTTRANO" in r or "FILOT" in r or r == "F":    return "F"
+    if "POLVERIGI" in r or r == "P":  return "P"
+    if "OSTRA" in r or r == "D":      return "D"
+    if "BELVED" in r or r == "B" or "DEPBELVE" in r:     return "B"
+    if "ANCONA" in r or r == "A":     return "A"
     return None
 
 def _turno_bucket(turno: str) -> str | None:
-    """
-    Riduce il codice turno a un 'bucket' di confronto:
-      - 'JU…' -> 'JU'
-      - 'J…' (non JU) -> 'J'
-      - altrimenti prima lettera (M, C, O, F, P, D, A, B…)
-      - esclude 'Assente' e R/RR
-    """
-    if not isinstance(turno, str):
-        turno = str(turno)
+    """Bucket turno: JU…, J… (non JU) o prima lettera; esclude Assente/R/RR."""
+    if not isinstance(turno, str): turno = str(turno)
     s = turno.strip()
     if not s or s.upper() == "ASSENTE" or s.upper() in REST_CODES:
         return None
@@ -85,13 +90,11 @@ def _turno_bucket(turno: str) -> str | None:
     return up[0]
 
 def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
-    """Prefissi considerati 'di casa' per la residenza (J e JU sono equivalenti)."""
-    if prefix in ("J", "JU"):
-        return {"J", "JU"}
+    if prefix in ("J", "JU"): return {"J", "JU"}
     return {prefix} if prefix else set()
 
 def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
-    """True se il turno è 'fuori deposito', con J/JU equivalenti ed esclusi R/RR e Assente."""
+    """True se il turno è ‘fuori deposito’ (J/JU equivalenti; R/RR/Assente esclusi)."""
     if "Residenza" not in df.columns or "Turno" not in df.columns:
         return pd.Series(False, index=df.index)
 
@@ -107,45 +110,33 @@ def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
 
     return df.apply(_is_trasferta, axis=1)
 
-# ---- Styled HTML per anteprima full-width con grassetto su trasferte ----
-def _style_bold_subset(df_disp: pd.DataFrame, mask: pd.Series, subset_cols: list[str]) -> str:
+def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series) -> str:
     """
-    HTML di una tabella:
-      - indice nascosto
-      - larghezza vera 100vw (oltre i padding di Streamlit)
-      - grassetto solo su colonne subset per le righe in trasferta (mask=True)
+    Ritorna HTML della tabella (pandas Styler) a larghezza piena.
+    Bold su Turno/Inizio/Fine quando trasferta_mask è True.
     """
-    mask = mask.reindex(df_disp.index).fillna(False)
+    # funzione per righe boldate (subset solo su colonne interessate)
+    subset_cols = [c for c in ["Turno", "Inizio", "Fine"] if c in g_disp.columns]
 
     def _bold_if_trasferta(row):
-        return ["font-weight: bold"] * len(row) if mask.loc[row.name] else [""] * len(row)
+        return (["font-weight: bold"] * len(row)) if trasferta_mask.loc[row.name] else ([""] * len(row))
 
-    sty = df_disp.style.apply(_bold_if_trasferta, axis=1, subset=subset_cols)
-    # nascondi indice (compat con varie versioni pandas)
-    try:    sty = sty.hide(axis="index")
-    except: 
-        try: sty = sty.hide_index()
-        except: pass
-
-    sty = sty.set_table_styles([
-        {"selector": "table",    "props": [("width", "100%"), ("border-collapse", "collapse"), ("table-layout", "fixed")]},
-        {"selector": "th, td",   "props": [("border", "1px solid #e6e6e6"), ("padding", "6px 8px")]},
-        {"selector": "thead th", "props": [("background-color", "#f7f7f7"), ("font-weight", "600")]},
-    ], overwrite=False)
-
-    html = sty.to_html()
-    # wrapper che forza la tabella ad estendersi a tutta la viewport
-    wrapper = f"<div style='width:100vw;margin-left:calc(50% - 50vw);margin-right:calc(50% - 50vw);'>{html}</div>"
-    return wrapper
-
-def _show_styled_table(df_disp: pd.DataFrame, mask: pd.Series):
-    subset_cols = [c for c in ["Turno", "Inizio", "Fine"] if c in df_disp.columns]
-    if not subset_cols:
-        # fallback: Arrow dataframe comunque a piena larghezza del container
-        st.dataframe(df_disp, use_container_width=True, hide_index=True)
-        return
-    html = _style_bold_subset(df_disp, mask, subset_cols)
-    st.markdown(html, unsafe_allow_html=True)
+    sty = (g_disp.style
+           .hide(axis="index")
+           .apply(_bold_if_trasferta, axis=1, subset=subset_cols)
+           .set_table_styles([
+               {"selector": "table", "props": [("width","100%"), ("table-layout","fixed"), ("border-collapse","collapse")]},
+               {"selector": "th",    "props": [("background","#f5f5f5"), ("text-align","left"), ("padding","6px")]},
+               {"selector": "td",    "props": [("padding","6px"), ("vertical-align","top")]},
+               # centro Inizio/Fine
+               {"selector": "th:nth-child(4), td:nth-child(4), th:nth-child(5), td:nth-child(5)",
+                "props": [("text-align","center")]},
+               # colonna Note: wrap e un po' più larga
+               {"selector": "th:nth-child(6), td:nth-child(6)",
+                "props": [("width","40%"), ("white-space","normal"), ("word-break","break-word")]}
+           ], overwrite=False)
+          )
+    return f'<div class="serv-table-wrap">{sty.to_html()}</div>'
 
 # ====================== UI ======================
 
@@ -166,7 +157,8 @@ with col2:
         help="Se deselezionato nasconde le righe con Turno = Assente (vale per anteprima ed export)."
     )
 
-debug_mode = st.checkbox("🧪 Modalità debug", value=False, help="Mostra info sniffer/header del file caricato.")
+debug_mode = st.checkbox("🧪 Modalità debug", value=False,
+                         help="Mostra info sniffer/header del file caricato.")
 
 # ====================== Azione ======================
 
@@ -175,7 +167,6 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
         st.warning("Carica prima un file.")
         st.stop()
 
-    # Debug opzionale (si esegue su stream; la nostra lettura fa seek(0))
     if debug_mode:
         try:
             info = debug_probe(uploaded)
@@ -192,17 +183,15 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
         # Filtro Assente per vista/export
         df_view = df_out.copy()
         if not show_absent and "Turno" in df_view.columns:
-            before = len(df_view)
+            before  = len(df_view)
             df_view = df_view[df_view["Turno"].astype(str).str.strip() != "Assente"].reset_index(drop=True)
-            hidden = before - len(df_view)
+            hidden  = before - len(df_view)
             if hidden > 0:
                 st.info(f"Righe 'Assente' nascoste: {hidden}")
 
         # Feedback meta
-        st.success(
-            f"File elaborato. Data: {meta.get('data','?')} – {meta.get('giorno','?')} "
-            f"(fonte: {meta.get('origine','?')})"
-        )
+        st.success(f"File elaborato. Data: {meta.get('data','?')} – {meta.get('giorno','?')} "
+                   f"(fonte: {meta.get('origine','?')})")
         st.subheader("Anteprima per deposito")
 
         # Anteprima per deposito con grassetto per trasferte
@@ -215,14 +204,16 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
 
                 # Ordinamento interno
                 if inner_sort_choice.startswith("Inizio") and "Inizio" in g.columns:
-                    by = ["Inizio"] + (["Cognome e Nome"] if "Cognome e Nome" in g.columns else [])
+                    by = ["Inizio"]
+                    if "Cognome e Nome" in g.columns: by.append("Cognome e Nome")
                     g = g.sort_values(by=by).reset_index(drop=True)
                 else:
                     by = []
                     if "Cognome e Nome" in g.columns: by.append("Cognome e Nome")
                     if "Inizio" in g.columns:         by.append("Inizio")
-                    if by: g = g.sort_values(by=by).reset_index(drop=True)
-                    # Compattazione
+                    if by:
+                        g = g.sort_values(by=by).reset_index(drop=True)
+                    # compattazione Nome/Matricola ripetuti consecutivi
                     if {"Cognome e Nome", "Matricola"}.issubset(g.columns):
                         same_person = g[["Cognome e Nome", "Matricola"]].eq(
                             g[["Cognome e Nome", "Matricola"]].shift(1)
@@ -230,13 +221,18 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
                         g.loc[same_person, ["Cognome e Nome", "Matricola"]] = ""
 
                 st.markdown(f"### **{res}**")
+
                 g_disp = _reorder_for_display(g)
-                mask   = _trasferta_mask(g)
-                _show_styled_table(g_disp, mask)
+                mask   = _trasferta_mask(g)     # calcolata sull’indice originale
+                html   = _styled_html_table(g_disp, mask)
+                st.markdown(html, unsafe_allow_html=True)
+
         else:
+            st.markdown("### **TUTTI**")
             g_disp = _reorder_for_display(df_view)
             mask   = _trasferta_mask(df_view)
-            _show_styled_table(g_disp, mask)
+            html   = _styled_html_table(g_disp, mask)
+            st.markdown(html, unsafe_allow_html=True)
 
         # --- Export Excel (ordine colonne, filtro Assente applicato) ---
         xls_buf = io.BytesIO()
@@ -251,13 +247,11 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
 
         # --- Export PDF ---
         with tempfile.TemporaryDirectory() as td:
-            pdf_path = Path(td) / "ServizioGiornaliero.pdf"
+            pdf_path   = Path(td) / "ServizioGiornaliero.pdf"
             inner_sort = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
-            build_pdf(
-                pdf_path, df_view, meta,
-                logo_path if logo_path.exists() else None,
-                title=TITLE, inner_sort=inner_sort
-            )
+            build_pdf(pdf_path, df_view, meta,
+                      logo_path if logo_path.exists() else None,
+                      title=TITLE, inner_sort=inner_sort)
             st.download_button(
                 "⬇️ Scarica PDF",
                 data=pdf_path.read_bytes(),
