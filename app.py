@@ -53,42 +53,41 @@ if st.button("▶️ Elabora"):
         st.success(f"File elaborato. Data: {meta.get('data','?')} – {meta.get('giorno','?')} (fonte: {meta.get('origine','?')})")
         st.subheader("Anteprima per deposito")
 
-# ordine gruppi (depositi): A→Z
-if "Residenza" in df_out.columns:
-    res_list = sorted(df_out["Residenza"].dropna().astype(str).unique())
-    for res in res_list:
-        g = df_out[df_out["Residenza"].astype(str) == res].copy()
+        # ordine gruppi (depositi): A→Z
+        if "Residenza" in df_out.columns:
+            res_list = sorted(df_out["Residenza"].dropna().astype(str).unique())
+            for res in res_list:
+                g = df_out[df_out["Residenza"].astype(str) == res].copy()
 
-        # sort interno per scelta
-        if inner_sort_choice.startswith("Inizio") and "Inizio" in g.columns:
-            by = ["Inizio"]
-            if "Cognome e Nome" in g.columns:
-                by.append("Cognome e Nome")
-            g = g.sort_values(by=by).reset_index(drop=True)
+                # sort interno per scelta
+                if inner_sort_choice.startswith("Inizio") and "Inizio" in g.columns:
+                    by = ["Inizio"]
+                    if "Cognome e Nome" in g.columns:
+                        by.append("Cognome e Nome")
+                    g = g.sort_values(by=by).reset_index(drop=True)
+                else:
+                    # "Cognome e Nome (A→Z)": ordina per Nome e, per la stessa persona, per Inizio
+                    by = []
+                    if "Cognome e Nome" in g.columns:
+                        by.append("Cognome e Nome")
+                    if "Inizio" in g.columns:
+                        by.append("Inizio")
+                    if by:
+                        g = g.sort_values(by=by).reset_index(drop=True)
+
+                    # compattamento: non ripetere Nome/Matricola per la stessa persona
+                    if {"Cognome e Nome", "Matricola"}.issubset(g.columns):
+                        same_person = (
+                            g[["Cognome e Nome", "Matricola"]]
+                            .eq(g[["Cognome e Nome", "Matricola"]].shift(1))
+                        ).all(axis=1)
+                        g.loc[same_person, ["Cognome e Nome", "Matricola"]] = ""
+
+                st.markdown(f"### **{res}**")
+                g_nosede = g.drop(columns=["Residenza"], errors="ignore")
+                st.dataframe(g_nosede, use_container_width=True, hide_index=True)
         else:
-            # "Cognome e Nome (A→Z)": ordina per Nome e, per la stessa persona, per Inizio
-            by = []
-            if "Cognome e Nome" in g.columns:
-                by.append("Cognome e Nome")
-            if "Inizio" in g.columns:
-                by.append("Inizio")
-            if by:
-                g = g.sort_values(by=by).reset_index(drop=True)
-
-            # compattamento: non ripetere Nome/Matricola per la stessa persona
-            if {"Cognome e Nome", "Matricola"}.issubset(g.columns):
-                same_person = (
-                    g[["Cognome e Nome", "Matricola"]]
-                    .eq(g[["Cognome e Nome", "Matricola"]].shift(1))
-                ).all(axis=1)
-                g.loc[same_person, ["Cognome e Nome", "Matricola"]] = ""
-
-        st.markdown(f"### **{res}**")
-        g_nosede = g.drop(columns=["Residenza"], errors="ignore")
-        st.dataframe(g_nosede, use_container_width=True, hide_index=True)
-else:
-    st.dataframe(df_out, use_container_width=True, hide_index=True)
-
+            st.dataframe(df_out, use_container_width=True, hide_index=True)
 
         # Download Excel (senza Residenza)
         xls_buf = io.BytesIO()
@@ -96,17 +95,28 @@ else:
             df_out.drop(columns=["Residenza"], errors="ignore").to_excel(
                 writer, sheet_name="ServizioGiornaliero", index=False
             )
-        st.download_button("⬇️ Scarica Excel", data=xls_buf.getvalue(), file_name="ServizioGiornaliero.xlsx",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.download_button(
+            "⬇️ Scarica Excel",
+            data=xls_buf.getvalue(),
+            file_name="ServizioGiornaliero.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
         # PDF raggruppato per Residenza
         with tempfile.TemporaryDirectory() as td:
             pdf_path = Path(td) / "ServizioGiornaliero.pdf"
-            inner_sort = "inizio" if "Inizio" in inner_sort_choice else "nome"
-            build_pdf(pdf_path, df_out, meta, logo_path if logo_path.exists() else None,
-                      title=TITLE, inner_sort=inner_sort)
-            st.download_button("⬇️ Scarica PDF", data=pdf_path.read_bytes(),
-                               file_name="ServizioGiornaliero.pdf", mime="application/pdf")
+            inner_sort = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
+            build_pdf(
+                pdf_path, df_out, meta,
+                logo_path if logo_path.exists() else None,
+                title=TITLE, inner_sort=inner_sort
+            )
+            st.download_button(
+                "⬇️ Scarica PDF",
+                data=pdf_path.read_bytes(),
+                file_name="ServizioGiornaliero.pdf",
+                mime="application/pdf"
+            )
 
     except Exception as e:
         st.error(f"Errore durante l'elaborazione: {e}")
