@@ -8,6 +8,7 @@ from xml.sax.saxutils import escape
 import pandas as pd
 from pathlib import Path
 import re
+from reportlab.lib.enums import TA_CENTER
 
 from .constants import DISPLAY_ORDER
 
@@ -134,9 +135,9 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
     page_w = A4[0] - left - right
 
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("TitleTight", parent=styles["Title"], spaceAfter=0, spaceBefore=0)
+    title_style = ParagraphStyle("TitleTight", parent=styles["Title"], fontName="Helvetica-Bold", fontSize=18, leading=20, textColor=colors.red, spaceAfter=6, spaceBefore=0)
     group_style = ParagraphStyle("GroupTitle", parent=styles["Heading2"],
-                                 fontSize=14, leading=16, spaceBefore=6, spaceAfter=2)
+                                 fontSize=14, leading=16, spaceBefore=6, spaceAfter=2, alignment = TA_CENTER)
     note_style  = ParagraphStyle("NoteBody", parent=styles["BodyText"],
                                  leading=12, wordWrap="CJK")  # wrap aggressivo se ci sono parole lunghe
 
