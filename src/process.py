@@ -186,22 +186,65 @@ def _canonicalize_header(cols: list[str]) -> list[str]:
     })
     return [exp_map.get(_norm_colname(c), str(c).strip()) for c in cols]
 
-def _find_header_row_robusto(df_raw: pd.DataFrame, expected: list[str], scan_rows: int = 120) -> int | None:
+def _find_header_row_robusto(df_raw: pd.DataFrame, expected: list[str], scan_rows: int = 160) -> int | None:
     """
-    Se non troviamo 'Cognome e Nome' esatto, scegli la riga con più match
-    contro EXPECTED_COLUMNS (normalizzati). Richiede ≥3 match.
+    Trova la riga header cercando corrispondenze 'fuzzy' (substring) tra i valori
+    della riga e i nomi attesi normalizzati. Più tollerante di un semplice '=='.
+    Restituisce l'indice della riga con punteggio massimo, se >= soglia.
     """
-    exp_set = {_norm_colname(c) for c in expected}
+    exp_norm = [_norm_colname(c) for c in expected]
+    # aggiungo sinonimi utili
+    exp_norm += [
+        _norm_colname("note"),
+        _norm_colname("indennita e note"),
+        _norm_colname("cognome nome"),
+        _norm_colname("nome e cognome"),
+        _norm_colname("matr"),
+    ]
+
     best_i, best_score = None, 0
+    n = min(scan_rows, len(df_raw))
+
+    for i in range(n):
+        row = df_raw.iloc[i].tolist()
+        row_norm = [_norm_colname(v) for v in row]
+        # punteggio: conta quante colonne attese compaiono come substring
+        score = 0
+        for en in exp_norm:
+            if not en:
+                continue
+            if any((en in rv) or (rv in en and rv != "") for rv in row_norm):
+                score += 1
+        if score > best_score:
+            best_i, best_score = i, score
+
+    # soglia bassa: spesso bastano 2-3 match per riconoscere l'header
+    return best_i if (best_i is not None and best_score >= 2) else None
+
+def _find_header_row_by_keywords(df_raw: pd.DataFrame, scan_rows: int = 160) -> int | None:
+    """
+    Fallback: riga che contiene almeno 2 fra {matricola, turno, inizio, fine}
+    e almeno 1 fra {cognome e nome, cognome, nome, indennita e note, note}.
+    """
+    must_any_1 = { _norm_colname(s) for s in [
+        "cognome e nome", "cognome", "nome", "indennita e note", "note"
+    ]}
+    must_any_2_pool = { _norm_colname(s) for s in [
+        "matricola", "turno", "inizio", "fine", "residenza", "categoria"
+    ]}
+
     n = min(scan_rows, len(df_raw))
     for i in range(n):
         row = df_raw.iloc[i].tolist()
-        score = sum(1 for v in row if _norm_colname(v) in exp_set)
-        if score > best_score:
-            best_i, best_score = i, score
-    if best_i is not None and best_score >= 3:
-        return best_i
+        row_norm = { _norm_colname(v) for v in row if _norm_colname(v) }
+        if not row_norm:
+            continue
+        has_1 = any(k in row_norm for k in must_any_1)
+        has_2 = sum(1 for k in must_any_2_pool if k in row_norm) >= 2
+        if has_1 and has_2:
+            return i
     return None
+
 
 # ======================= Parsing base =======================
 
@@ -250,12 +293,15 @@ def read_input_excel(file) -> tuple[pd.DataFrame, dict]:
     # Meta (data/giorno) dalla prima riga non vuota
     date_str, day_str = parse_date_and_day(df_raw)
 
-    # Trova la riga di intestazione: prima il probe letterale, poi fallback robusto
-    hdr_row = find_header_row(df_raw, HEADER_PROBE)
+    # Trova la riga di intestazione (robusto → keywords → letterale)
+    hdr_row = _find_header_row_robusto(df_raw, EXPECTED_COLUMNS)
     if hdr_row is None:
-        hdr_row = _find_header_row_robusto(df_raw, EXPECTED_COLUMNS)
+        hdr_row = _find_header_row_by_keywords(df_raw)
     if hdr_row is None:
-        raise ValueError(f"Intestazione '{HEADER_PROBE}' non trovata.")
+        hdr_row = find_header_row(df_raw, HEADER_PROBE)
+    if hdr_row is None:
+        raise ValueError(f"Intestazione '{HEADER_PROBE}' non trovata (ho provato match fuzzy e parole–chiave).")
+
 
     # Header canonico
     raw_cols = df_raw.iloc[hdr_row].tolist()
