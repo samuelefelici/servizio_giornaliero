@@ -151,14 +151,36 @@ def _read_excel_robusto(file) -> tuple[pd.DataFrame, str]:
 # ----------------------- Parsing base -----------------------
 
 def parse_date_and_day(df_raw: pd.DataFrame) -> tuple[str, str]:
-    date_str = str(df_raw.iloc[0, 0]).strip() if df_raw.shape[1] > 0 else ""
-    day_str  = str(df_raw.iloc[1, 0]).strip() if df_raw.shape[1] > 0 and len(df_raw) > 1 else ""
-    try:
-        dt = parser.parse(date_str, dayfirst=True).date()
-        date_str = dt.strftime("%d/%m/%Y")
-    except Exception:
-        pass
+    """
+    Trova la prima riga NON vuota e usa colonna 0 come data e colonna 1 come giorno.
+    Normalizza la data in dd/mm/YYYY se possibile.
+    """
+    def _non_empty_row(vals) -> bool:
+        for v in vals:
+            if pd.isna(v):
+                continue
+            if isinstance(v, str):
+                if v.strip() != "":
+                    return True
+            else:
+                # numeri o altro: considerali non vuoti
+                return True
+        return False
+
+    date_str, day_str = "", ""
+    for i in range(min(20, len(df_raw))):
+        row = df_raw.iloc[i].tolist()
+        if _non_empty_row(row):
+            date_str = str(row[0]).strip() if len(row) > 0 else ""
+            day_str  = str(row[1]).strip() if len(row) > 1 else ""
+            try:
+                dt = parser.parse(date_str, dayfirst=True).date()
+                date_str = dt.strftime("%d/%m/%Y")
+            except Exception:
+                pass
+            return date_str, day_str
     return date_str, day_str
+
 
 def read_input_excel(file) -> tuple[pd.DataFrame, dict]:
     """
