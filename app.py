@@ -40,36 +40,77 @@ def _reorder_for_display(df: pd.DataFrame) -> pd.DataFrame:
     return df2[cols] if cols else df2
 
 def _res_to_prefix(res: str) -> str | None:
-    """Mappa il nome deposito al prefisso atteso del turno."""
+    """Mappa la residenza a un prefisso atteso (JU o J sono famigliari)."""
     if not isinstance(res, str):
         return None
     r = res.upper().replace("_", " ")
-    if "JESI URBANO" in r or r.strip() == "JU": return "JU"
-    if "JESI" in r or r.strip() == "J":       return "J"
-    if "MARINA" in r or r.strip() == "M":     return "M"
-    if "CASTELFIDARDO" in r or "C.FID" in r or r.strip() == "C": return "C"
-    if "OSIMO" in r or r.strip() == "O":      return "O"
-    if "FILOTTRANO" in r or "FILOT" in r or r.strip() == "F":    return "F"
-    if "POLVERIGI" in r or r.strip() == "P":  return "P"
-    if "OSTRA" in r or r.strip() == "D":      return "D"
-    if "BELVED" in r or r.strip() == "B" or "DEPBELVE" in r:     return "B"
-    if "ANCONA" in r or r.strip() == "A":     return "A"
+    if "JESI URBANO" in r or r.strip() == "JU":
+        return "JU"
+    if "JESI" in r or r.strip() == "J":
+        return "J"
+    if "MARINA" in r or r.strip() == "M":
+        return "M"
+    if "CASTELFIDARDO" in r or "C.FID" in r or r.strip() == "C":
+        return "C"
+    if "OSIMO" in r or r.strip() == "O":
+        return "O"
+    if "FILOTTRANO" in r or "FILOT" in r or r.strip() == "F":
+        return "F"
+    if "POLVERIGI" in r or r.strip() == "P":
+        return "P"
+    if "OSTRA" in r or r.strip() == "D":
+        return "D"
+    if "BELVED" in r or r.strip() == "B" or "DEPBELVE" in r:
+        return "B"
+    if "ANCONA" in r or r.strip() == "A":
+        return "A"
     return None
 
-def _turno_prefix(turno: str) -> str | None:
-    """Estrae il prefisso alfabetico da un codice turno (es. JU19 -> JU, M150a -> M)."""
+def _turno_bucket(turno: str) -> str | None:
+    """
+    Riduce il codice turno a un 'bucket' di confronto:
+      - 'JU…' -> 'JU'
+      - 'J…' (non JU) -> 'J'
+      - altrimenti prima lettera (M, C, O, F, P, D, A, B…)
+    """
     if not isinstance(turno, str):
         turno = str(turno)
-    m = re.match(r"[A-Za-z]+", turno.strip())
-    return m.group(0).upper() if m else None
+    s = turno.strip()
+    if not s or s.upper() == "ASSENTE":
+        return None
+    m = re.match(r"[A-Za-z]+", s)
+    if not m:
+        return None
+    up = m.group(0).upper()
+    if up.startswith("JU"):
+        return "JU"
+    if up.startswith("J"):
+        return "J"
+    return up[0]  # prima lettera per gli altri depositi
+
+def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
+    """Prefissi considerati 'di casa' per la residenza (J e JU sono equivalenti)."""
+    if prefix in ("J", "JU"):
+        return {"J", "JU"}
+    return {prefix} if prefix else set()
 
 def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
-    """True se il prefisso del turno è diverso da quello atteso per la residenza."""
-    if "Residenza" not in df.columns or "Turno" not in df.columns:
+    """
+    True se la riga è 'trasferta' (Turno non appartiene ai prefissi accettati per la residenza).
+    Esclude Assente e righe senza info utile.
+    """
+    if not {"Residenza", "Turno"}.issubset(df.columns):
         return pd.Series(False, index=df.index)
-    expected = df["Residenza"].apply(_res_to_prefix)
-    actual   = df["Turno"].astype(str).apply(_turno_prefix)
-    return expected.notna() & actual.notna() & (expected != actual)
+
+    def _is_trasferta(row) -> bool:
+        rp = _res_to_prefix(row["Residenza"])
+        tb = _turno_bucket(row["Turno"])
+        if rp is None or tb is None:
+            return False
+        accepted = _accepted_prefixes_for_res(rp)
+        return tb not in accepted
+
+    return df.apply(_is_trasferta, axis=1)
 
 # ====================== UI ======================
 
