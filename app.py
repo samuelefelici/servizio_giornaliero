@@ -15,6 +15,7 @@ try:
     from src.constants import TITLE
 except Exception as e:
     import traceback
+    st.set_page_config(page_title="Servizio Giornaliero", layout="wide")
     st.error(f"Errore durante l'import dei moduli: {e}")
     st.code("".join(traceback.format_exception(*sys.exc_info())))
     st.stop()
@@ -37,43 +38,65 @@ with col1:
         horizontal=True,
         index=0
     )
+with col2:
+    show_absent = st.checkbox(
+        "Mostra anche gli 'Assente'",
+        value=True,
+        help="Se deselezionato nasconde le righe con Turno = Assente (vale per anteprima ed export)."
+    )
+
 debug_mode = st.checkbox("🧪 Modalità debug", value=False)
 
 if st.button("▶️ Elabora"):
     if not uploaded:
         st.warning("Carica prima un file.")
         st.stop()
-if debug_mode:
-    from src.process import debug_probe
-    info = debug_probe(uploaded)
-    with st.expander("Dettagli debug (header/sniffer)"):
-        st.json(info)
 
+    # Debug opzionale (prima della lettura 'vera' per non alterare lo stream)
+    if debug_mode:
+        try:
+            from src.process import debug_probe
+            info = debug_probe(uploaded)
+            with st.expander("Dettagli debug (header/sniffer)"):
+                st.json(info)
+        except Exception as e:
+            st.warning(f"Debug non riuscito: {e}")
 
     try:
+        # Lettura + pipeline base (filtri matricole/turni, rinomine, 'Assente', ordinamenti)
         df, meta = read_input_excel(uploaded)
-
-        # pipeline base (filtri, rinomine, Assente, ecc.)
         df_out = transform_dataframe(df, cfg_dir)
 
-        # anteprima a blocchi (senza colonna Residenza)
-        st.success(f"File elaborato. Data: {meta.get('data','?')} – {meta.get('giorno','?')} (fonte: {meta.get('origine','?')})")
+        # Applica filtro "Assente" alla vista (e agli export)
+        df_view = df_out.copy()
+        if not show_absent and "Turno" in df_view.columns:
+            df_view = (
+                df_view[df_view["Turno"].astype(str).str.strip() != "Assente"]
+                .reset_index(drop=True)
+            )
+            nascosti = len(df_out) - len(df_view)
+            if nascosti > 0:
+                st.info(f"Righe 'Assente' nascoste: {nascosti}")
+
+        # Anteprima per deposito (senza colonna Residenza)
+        st.success(f"File elaborato. Data: {meta.get('data','?')} – {meta.get('giorno','?')} "
+                   f"(fonte: {meta.get('origine','?')})")
         st.subheader("Anteprima per deposito")
 
-        # ordine gruppi (depositi): A→Z
-        if "Residenza" in df_out.columns:
-            res_list = sorted(df_out["Residenza"].dropna().astype(str).unique())
+        if "Residenza" in df_view.columns:
+            res_list = sorted(df_view["Residenza"].dropna().astype(str).unique())
             for res in res_list:
-                g = df_out[df_out["Residenza"].astype(str) == res].copy()
+                g = df_view[df_view["Residenza"].astype(str) == res].copy()
+                if g.empty:
+                    continue
 
-                # sort interno per scelta
+                # Ordinamento interno
                 if inner_sort_choice.startswith("Inizio") and "Inizio" in g.columns:
                     by = ["Inizio"]
                     if "Cognome e Nome" in g.columns:
                         by.append("Cognome e Nome")
                     g = g.sort_values(by=by).reset_index(drop=True)
                 else:
-                    # "Cognome e Nome (A→Z)": ordina per Nome e, per la stessa persona, per Inizio
                     by = []
                     if "Cognome e Nome" in g.columns:
                         by.append("Cognome e Nome")
@@ -82,11 +105,10 @@ if debug_mode:
                     if by:
                         g = g.sort_values(by=by).reset_index(drop=True)
 
-                    # compattamento: non ripetere Nome/Matricola per la stessa persona
+                    # Compattazione: non ripetere Nome/Matricola per righe consecutive della stessa persona
                     if {"Cognome e Nome", "Matricola"}.issubset(g.columns):
-                        same_person = (
-                            g[["Cognome e Nome", "Matricola"]]
-                            .eq(g[["Cognome e Nome", "Matricola"]].shift(1))
+                        same_person = g[["Cognome e Nome", "Matricola"]].eq(
+                            g[["Cognome e Nome", "Matricola"]].shift(1)
                         ).all(axis=1)
                         g.loc[same_person, ["Cognome e Nome", "Matricola"]] = ""
 
@@ -94,12 +116,12 @@ if debug_mode:
                 g_nosede = g.drop(columns=["Residenza"], errors="ignore")
                 st.dataframe(g_nosede, use_container_width=True, hide_index=True)
         else:
-            st.dataframe(df_out, use_container_width=True, hide_index=True)
+            st.dataframe(df_view, use_container_width=True, hide_index=True)
 
-        # Download Excel (senza Residenza)
+        # Download Excel (senza Residenza, coerente col filtro 'Assente')
         xls_buf = io.BytesIO()
         with pd.ExcelWriter(xls_buf, engine="openpyxl") as writer:
-            df_out.drop(columns=["Residenza"], errors="ignore").to_excel(
+            df_view.drop(columns=["Residenza"], errors="ignore").to_excel(
                 writer, sheet_name="ServizioGiornaliero", index=False
             )
         st.download_button(
@@ -109,12 +131,12 @@ if debug_mode:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-        # PDF raggruppato per Residenza
+        # PDF raggruppato per Residenza (coerente col filtro 'Assente')
         with tempfile.TemporaryDirectory() as td:
             pdf_path = Path(td) / "ServizioGiornaliero.pdf"
             inner_sort = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
             build_pdf(
-                pdf_path, df_out, meta,
+                pdf_path, df_view, meta,
                 logo_path if logo_path.exists() else None,
                 title=TITLE, inner_sort=inner_sort
             )
