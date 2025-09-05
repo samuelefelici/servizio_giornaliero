@@ -5,18 +5,24 @@ from reportlab.lib import colors
 from reportlab.lib.units import mm
 import pandas as pd
 from pathlib import Path
+from .constants import DISPLAY_ORDER
 
 # colonne da stampare (senza Residenza)
 _PRINT_COLS = ["Cognome e Nome", "Matricola", "Turno", "Inizio", "Fine", "Indennità e note"]
 
 def _table_data_for(df: pd.DataFrame):
-    keep = [c for c in _PRINT_COLS if c in df.columns]
-    dfp = df[keep].copy()
-    # rinomina "Indennità e note" -> "Note"
-    dfp.columns = [c.replace("Indennità e note", "Note") for c in dfp.columns]
+    # Applica l’ordine standard e ignora "Residenza" se presente
+    cols = [c for c in DISPLAY_ORDER if c in df.columns]
+    dfp = df.copy()
+    if cols:
+        dfp = dfp[cols]
+    dfp = dfp.drop(columns=["Residenza"], errors="ignore")
+
+    # NIENTE rename -> teniamo "Indennità e note"
     header = list(dfp.columns)
     rows = dfp.fillna("").values.tolist()
     return [header] + rows
+
 
 def _collapse_repeats(gdf: pd.DataFrame,
                       key_cols=("Cognome e Nome", "Matricola"),
