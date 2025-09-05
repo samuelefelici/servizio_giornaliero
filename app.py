@@ -1,4 +1,4 @@
-import os, sys
+import os, sys, re
 from pathlib import Path
 from src.constants import TITLE, DISPLAY_ORDER  # <-- usiamo anche DISPLAY_ORDER
 
@@ -120,9 +120,23 @@ if st.button("▶️ Elabora"):
                         ).all(axis=1)
                         g.loc[same_person, ["Cognome e Nome", "Matricola"]] = ""
 
-                st.markdown(f"### **{res}**")
-                g_disp = _reorder_for_display(g)
-                st.dataframe(g_disp, use_container_width=True, hide_index=True)
+st.markdown(f"### **{res}**")
+g_disp = _reorder_for_display(g)
+
+# calcola maschera di trasferta sulla tabella originale 'g'
+mask = _trasferta_mask(g)
+
+# applica bold solo a Turno/Inizio/Fine (se presenti)
+subset_cols = [c for c in ["Turno", "Inizio", "Fine"] if c in g_disp.columns]
+if subset_cols:
+    def _bold_if_trasferta(row):
+        # row contiene solo le colonne del subset (grazie a subset=...)
+        return ["font-weight: bold"] * len(row) if mask.loc[row.name] else [""] * len(row)
+    styled = g_disp.style.apply(_bold_if_trasferta, axis=1, subset=subset_cols)
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+else:
+    st.dataframe(g_disp, use_container_width=True, hide_index=True)
+
         else:
             df_tmp = _reorder_for_display(df_view)
             st.dataframe(df_tmp, use_container_width=True, hide_index=True)
@@ -154,6 +168,48 @@ if st.button("▶️ Elabora"):
                 file_name="ServizioGiornaliero.pdf",
                 mime="application/pdf"
             )
+
+    def _res_to_prefix(res: str) -> str | None:
+    if not isinstance(res, str):
+        return None
+    r = res.upper().replace("_", " ")
+    # gestisci alias/abbreviazioni frequenti
+    if "JESI URBANO" in r or r.strip() == "JU":
+        return "JU"
+    if "JESI" in r or r.strip() == "J":
+        return "J"
+    if "MARINA" in r or r.strip() == "M":
+        return "M"
+    if "CASTELFIDARDO" in r or "C.FID" in r or r.strip() == "C":
+        return "C"
+    if "OSIMO" in r or r.strip() == "O":
+        return "O"
+    if "FILOTTRANO" in r or "FILOT" in r or r.strip() == "F":
+        return "F"
+    if "POLVERIGI" in r or r.strip() == "P":
+        return "P"
+    if "OSTRA" in r or r.strip() == "D":
+        return "D"
+    if "BELVED" in r or r.strip() == "B" or "DEPBELVE" in r:
+        return "B"
+    if "ANCONA" in r or r.strip() == "A":
+        return "A"
+    return None
+
+def _turno_prefix(turno: str) -> str | None:
+    if not isinstance(turno, str):
+        turno = str(turno)
+    m = re.match(r"[A-Za-z]+", turno.strip())
+    return m.group(0).upper() if m else None
+
+def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
+    """True se il prefisso del turno è diverso da quello atteso per la residenza."""
+    if "Residenza" not in df.columns or "Turno" not in df.columns:
+        return pd.Series(False, index=df.index)
+    expected = df["Residenza"].apply(_res_to_prefix)
+    actual = df["Turno"].astype(str).apply(_turno_prefix)
+    return expected.notna() & actual.notna() & (expected != actual)
+
 
     except Exception as e:
         import traceback
