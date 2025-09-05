@@ -203,6 +203,15 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
         # Feedback meta
         st.success(f"File elaborato. Data: {meta.get('data','?')} – {meta.get('giorno','?')} "
                    f"(fonte: {meta.get('origine','?')})")
+        # Titolo rosso dinamico (anteprima)
+        st.markdown(
+            f"""
+            <h2 style="color:#d00; font-weight:800; margin: 0.5rem 0 0.5rem 0;">
+              Servizio Giornaliero: {meta.get('giorno','')} {meta.get('data','')}
+            </h2>
+            """,
+            unsafe_allow_html=True,
+        )
         st.subheader("Anteprima per deposito")
 
         # Anteprima per deposito con grassetto per trasferte
@@ -231,7 +240,11 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
                         ).all(axis=1)
                         g.loc[same_person, ["Cognome e Nome", "Matricola"]] = ""
 
-                st.markdown(f"### **{res}**")
+                st.markdown(
+                    f"<h3 style='text-align:center; margin: 0.5rem 0 0.25rem 0;'>{res}</h3>",
+                    unsafe_allow_html=True,
+                )
+
 
                 g_disp = _reorder_for_display(g)
                 mask   = _trasferta_mask(g)     # calcolata sull’indice originale
