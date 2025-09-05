@@ -10,36 +10,84 @@ import re
 
 from .constants import DISPLAY_ORDER  # ordine: Matricola, Cognome e Nome, Turno, Inizio, Fine, Indennità e note
 
+
 # ---------- helper prefissi deposito/turno ----------
 def _res_to_prefix(res: str) -> str | None:
+    """Mappa il testo della residenza a un prefisso 'atteso' (J e JU sono famigliari)."""
     if not isinstance(res, str):
         return None
-    r = res.upper().replace("_", " ")
-    if "JESI URBANO" in r or r.strip() == "JU": return "JU"
-    if "JESI" in r or r.strip() == "J":       return "J"
-    if "MARINA" in r or r.strip() == "M":     return "M"
-    if "CASTELFIDARDO" in r or "C.FID" in r or r.strip() == "C": return "C"
-    if "OSIMO" in r or r.strip() == "O":      return "O"
-    if "FILOTTRANO" in r or "FILOT" in r or r.strip() == "F":    return "F"
-    if "POLVERIGI" in r or r.strip() == "P":  return "P"
-    if "OSTRA" in r or r.strip() == "D":      return "D"
-    if "BELVED" in r or r.strip() == "B" or "DEPBELVE" in r:     return "B"
-    if "ANCONA" in r or r.strip() == "A":     return "A"
+    r = res.upper().replace("_", " ").strip()
+    if "JESI URBANO" in r or r == "JU":
+        return "JU"
+    if "JESI" in r or r == "J":
+        return "J"
+    if "MARINA" in r or r == "M":
+        return "M"
+    if "CASTELFIDARDO" in r or "C.FID" in r or r == "C":
+        return "C"
+    if "OSIMO" in r or r == "O":
+        return "O"
+    if "FILOTTRANO" in r or "FILOT" in r or r == "F":
+        return "F"
+    if "POLVERIGI" in r or r == "P":
+        return "P"
+    if "OSTRA" in r or r == "D":
+        return "D"
+    if "BELVED" in r or r == "B" or "DEPBELVE" in r:
+        return "B"
+    if "ANCONA" in r or r == "A":
+        return "A"
     return None
 
-def _turno_prefix(turno: str) -> str | None:
+
+def _turno_bucket(turno: str) -> str | None:
+    """
+    Riduce il codice turno a un 'bucket' per confronto:
+      - 'JU…' -> 'JU'
+      - 'J…'  (non JU) -> 'J'
+      - altri -> prima lettera (M, C, O, F, P, D, A, B…)
+    Esclude 'Assente'.
+    """
     if not isinstance(turno, str):
         turno = str(turno)
-    m = re.match(r"[A-Za-z]+", turno.strip())
-    return m.group(0).upper() if m else None
+    s = turno.strip()
+    if not s or s.upper() == "ASSENTE":
+        return None
+    m = re.match(r"[A-Za-z]+", s)
+    if not m:
+        return None
+    up = m.group(0).upper()
+    if up.startswith("JU"):
+        return "JU"
+    if up.startswith("J"):
+        return "J"
+    return up[0]
+
+
+def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
+    """Prefissi considerati 'di casa' per la residenza (J e JU sono equivalenti)."""
+    if prefix in ("J", "JU"):
+        return {"J", "JU"}
+    return {prefix} if prefix else set()
+
 
 def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
-    """True se il prefisso del turno è diverso da quello atteso per la residenza."""
+    """
+    True se la riga è in 'trasferta' (turno non appartiene ai prefissi accettati).
+    Considera J e JU equivalenti; esclude 'Assente' e righe incomplete.
+    """
     if "Residenza" not in df.columns or "Turno" not in df.columns:
         return pd.Series(False, index=df.index)
-    expected = df["Residenza"].apply(_res_to_prefix)
-    actual   = df["Turno"].astype(str).apply(_turno_prefix)
-    return expected.notna() & actual.notna() & (expected != actual)
+
+    def _is_trasferta(row) -> bool:
+        rp = _res_to_prefix(row["Residenza"])
+        tb = _turno_bucket(row["Turno"])
+        if rp is None or tb is None:
+            return False
+        return tb not in _accepted_prefixes_for_res(rp)
+
+    return df.apply(_is_trasferta, axis=1)
+
 
 # ---------- shaping tabella ----------
 def _collapse_repeats(gdf: pd.DataFrame,
@@ -56,6 +104,7 @@ def _collapse_repeats(gdf: pd.DataFrame,
             g.loc[dup_mask, c] = ""
     return g
 
+
 def _table_data_for(df: pd.DataFrame):
     """Applica DISPLAY_ORDER e rimuove 'Residenza' se presente."""
     cols = [c for c in DISPLAY_ORDER if c in df.columns]
@@ -63,11 +112,10 @@ def _table_data_for(df: pd.DataFrame):
     if cols:
         dfp = dfp[cols]
     dfp = dfp.drop(columns=["Residenza"], errors="ignore")
-
-    # Manteniamo il nome originale "Indennità e note"
-    header = list(dfp.columns)
+    header = list(dfp.columns)  # manteniamo "Indennità e note"
     rows = dfp.fillna("").values.tolist()
     return [header] + rows
+
 
 # ---------- build PDF ----------
 def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
@@ -75,15 +123,16 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
               inner_sort: str = "nome"):
     """
     Crea un PDF raggruppato per Residenza.
-    - Titolo compatto in alto (senza riga vuota sotto)
+    - Titolo compatto in alto
     - Per ogni Residenza: titolo gruppo e tabella (senza colonna Residenza)
-    - inner_sort: "nome" (Cognome e Nome A→Z + Inizio crescente per stessa persona)
-                  oppure "inizio" (orario; Nome come tie-breaker)
-    - Turni in TRASFERTA: celle Turno/Inizio/Fine in grassetto.
+    - inner_sort: "nome" (A→Z + Inizio come tie-breaker) oppure "inizio"
+    - Trasferte: celle Turno/Inizio/Fine in grassetto.
     """
-    doc = SimpleDocTemplate(str(path_out), pagesize=A4,
-                            rightMargin=10*mm, leftMargin=10*mm,
-                            topMargin=12*mm, bottomMargin=12*mm)
+    doc = SimpleDocTemplate(
+        str(path_out), pagesize=A4,
+        rightMargin=10*mm, leftMargin=10*mm,
+        topMargin=12*mm, bottomMargin=12*mm
+    )
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle("TitleTight", parent=styles["Title"], spaceAfter=0, spaceBefore=0)
     group_style = ParagraphStyle("GroupTitle", parent=styles["Heading2"],
@@ -122,10 +171,13 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
                 by.append("Inizio")
             if by:
                 gdf = gdf.sort_values(by=by).reset_index(drop=True)
-            gdf = _collapse_repeats(gdf, key_cols=("Cognome e Nome", "Matricola"),
-                                    collapse_cols=("Cognome e Nome", "Matricola"))
+            gdf = _collapse_repeats(
+                gdf,
+                key_cols=("Cognome e Nome", "Matricola"),
+                collapse_cols=("Cognome e Nome", "Matricola")
+            )
 
-        # Maschera trasferte (calcolata sull’ordine definitivo del gruppo)
+        # Maschera trasferte (sull’ordine definitivo del gruppo)
         trasferte = _trasferta_mask(gdf)
 
         if not first_block:
@@ -142,16 +194,16 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
         # Indici dinamici per colonne interessate
         col_idx = {name: header.index(name) for name in ["Turno", "Inizio", "Fine"] if name in header}
         idx_inizio = col_idx.get("Inizio")
-        idx_fine   = col_idx.get("Fine")
+        idx_fine = col_idx.get("Fine")
 
         tbl = Table(data, repeatRows=1)
 
         # Stile base
         base_style = [
-            ("GRID",       (0,0), (-1,-1), 0.25, colors.grey),
-            ("BACKGROUND", (0,0), (-1,0), colors.whitesmoke),
-            ("FONTNAME",   (0,0), (-1,0), "Helvetica-Bold"),
-            ("VALIGN",     (0,0), (-1,-1), "TOP"),
+            ("GRID",       (0, 0), (-1, -1), 0.25, colors.grey),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+            ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("VALIGN",     (0, 0), (-1, -1), "TOP"),
         ]
         # Allineamento Inizio/Fine al centro se presenti
         if idx_inizio is not None:
@@ -163,7 +215,7 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
         for i, is_tr in enumerate(trasferte.tolist(), start=1):  # +1 per saltare l'header
             if not is_tr:
                 continue
-            for colname, cidx in col_idx.items():
+            for cidx in col_idx.values():
                 base_style.append(("FONTNAME", (cidx, i), (cidx, i), "Helvetica-Bold"))
 
         tbl.setStyle(TableStyle(base_style))
