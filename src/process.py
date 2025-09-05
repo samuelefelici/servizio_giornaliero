@@ -1,4 +1,5 @@
 import io, csv
+import unicodedata
 from pathlib import Path
 import pandas as pd
 from dateutil import parser
@@ -8,7 +9,7 @@ from .constants import (
 )
 from .utils import find_header_row, coerce_time, clean_spaces, clean_column_names
 
-# ----------------------- Sniffer/lettura robusta -----------------------
+# ======================= Sniffer / lettura robusta =======================
 
 def _is_zip(b: bytes) -> bool:
     # XLSX/OOXML zip magic
@@ -148,7 +149,61 @@ def _read_excel_robusto(file) -> tuple[pd.DataFrame, str]:
 
     raise ValueError("Formato Excel non riconosciuto. Prova a risalvare come .xlsx o esporta CSV/TSV.")
 
-# ----------------------- Parsing base -----------------------
+# ======================= Normalizzazione header =======================
+
+def _strip_accents(s: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+
+def _norm_colname(s) -> str:
+    """
+    Normalizza per confronto:
+    - NBSP→spazio, strip
+    - rimozione accenti
+    - casefold
+    - comprime spazi multipli in uno
+    """
+    if s is None:
+        return ""
+    s = str(s).replace("\u00A0", " ").strip()
+    s = _strip_accents(s).casefold()
+    s = " ".join(s.split())
+    return s
+
+def _canonicalize_header(cols: list[str]) -> list[str]:
+    """
+    Rimappa i nomi colonna letti alla forma canonica EXPECTED_COLUMNS,
+    accettando varianti comuni.
+    """
+    exp_map = {_norm_colname(e): e for e in EXPECTED_COLUMNS}
+    # sinonimi/varianti frequenti
+    exp_map.update({
+        _norm_colname("note"): "Indennità e note",
+        _norm_colname("indennita e note"): "Indennità e note",
+        _norm_colname("cognome nome"): "Cognome e Nome",
+        _norm_colname("nome e cognome"): "Cognome e Nome",
+        _norm_colname("matr"): "Matricola",
+        _norm_colname("matricola"): "Matricola",
+    })
+    return [exp_map.get(_norm_colname(c), str(c).strip()) for c in cols]
+
+def _find_header_row_robusto(df_raw: pd.DataFrame, expected: list[str], scan_rows: int = 120) -> int | None:
+    """
+    Se non troviamo 'Cognome e Nome' esatto, scegli la riga con più match
+    contro EXPECTED_COLUMNS (normalizzati). Richiede ≥3 match.
+    """
+    exp_set = {_norm_colname(c) for c in expected}
+    best_i, best_score = None, 0
+    n = min(scan_rows, len(df_raw))
+    for i in range(n):
+        row = df_raw.iloc[i].tolist()
+        score = sum(1 for v in row if _norm_colname(v) in exp_set)
+        if score > best_score:
+            best_i, best_score = i, score
+    if best_i is not None and best_score >= 3:
+        return best_i
+    return None
+
+# ======================= Parsing base =======================
 
 def parse_date_and_day(df_raw: pd.DataFrame) -> tuple[str, str]:
     """
@@ -181,7 +236,6 @@ def parse_date_and_day(df_raw: pd.DataFrame) -> tuple[str, str]:
             return date_str, day_str
     return date_str, day_str
 
-
 def read_input_excel(file) -> tuple[pd.DataFrame, dict]:
     """
     Legge il file, pulisce spazi/NBSP, trova l'intestazione in modo robusto,
@@ -196,7 +250,7 @@ def read_input_excel(file) -> tuple[pd.DataFrame, dict]:
     # Meta (data/giorno) dalla prima riga non vuota
     date_str, day_str = parse_date_and_day(df_raw)
 
-    # Trova la riga di intestazione: prima prova con il probe letterale, poi fallback robusto
+    # Trova la riga di intestazione: prima il probe letterale, poi fallback robusto
     hdr_row = find_header_row(df_raw, HEADER_PROBE)
     if hdr_row is None:
         hdr_row = _find_header_row_robusto(df_raw, EXPECTED_COLUMNS)
@@ -250,32 +304,7 @@ def read_input_excel(file) -> tuple[pd.DataFrame, dict]:
     meta = {"data": date_str, "giorno": day_str, "origine": origine}
     return df, meta
 
-
-    # ✅ Elimina righe completamente vuote sulle colonne utili
-    def _row_is_empty(row) -> bool:
-        for v in row:
-            if pd.isna(v):
-                continue
-            if isinstance(v, str) and v.strip() == "":
-                continue
-            return False
-        return True
-
-    df = df[~df.apply(_row_is_empty, axis=1)].reset_index(drop=True)
-
-    # Tipizzazioni / orari
-    if "Matricola" in df.columns:
-        df["Matricola"] = df["Matricola"].astype(str).str.strip()
-    if "Inizio" in df.columns:
-        df["Inizio"] = coerce_time(df["Inizio"])
-    if "Fine" in df.columns:
-        df["Fine"] = coerce_time(df["Fine"])
-
-    meta = {"data": date_str, "giorno": day_str, "origine": origine}
-    return df, meta
-
-
-# ----------------------- Trasformazione (senza riepilogo) -----------------------
+# ======================= Trasformazione (senza riepilogo) =======================
 
 def load_config_tables(config_dir: Path):
     m_path = config_dir / "matricole_da_omettere.csv"
