@@ -53,22 +53,42 @@ if st.button("▶️ Elabora"):
         st.success(f"File elaborato. Data: {meta.get('data','?')} – {meta.get('giorno','?')} (fonte: {meta.get('origine','?')})")
         st.subheader("Anteprima per deposito")
 
-        # ordine gruppi (depositi): A→Z
-        if "Residenza" in df_out.columns:
-            for res in sorted(df_out["Residenza"].dropna().astype(str).unique()):
-                g = df_out[df_out["Residenza"].astype(str) == res].copy()
-                # sort interno per scelta
-                if "Inizio (orario)" in inner_sort_choice and "Inizio" in g.columns:
-                    g = g.sort_values(by=["Inizio","Cognome e Nome"] if "Cognome e Nome" in g.columns else ["Inizio"])
-                else:
-                    if "Cognome e Nome" in g.columns:
-                        g = g.sort_values(by=["Cognome e Nome"])
+# ordine gruppi (depositi): A→Z
+if "Residenza" in df_out.columns:
+    res_list = sorted(df_out["Residenza"].dropna().astype(str).unique())
+    for res in res_list:
+        g = df_out[df_out["Residenza"].astype(str) == res].copy()
 
-                st.markdown(f"### **{res}**")
-                g_nosede = g.drop(columns=["Residenza"], errors="ignore")
-                st.dataframe(g_nosede, use_container_width=True, hide_index=True)
+        # sort interno per scelta
+        if inner_sort_choice.startswith("Inizio") and "Inizio" in g.columns:
+            by = ["Inizio"]
+            if "Cognome e Nome" in g.columns:
+                by.append("Cognome e Nome")
+            g = g.sort_values(by=by).reset_index(drop=True)
         else:
-            st.dataframe(df_out, use_container_width=True, hide_index=True)
+            # "Cognome e Nome (A→Z)": ordina per Nome e, per la stessa persona, per Inizio
+            by = []
+            if "Cognome e Nome" in g.columns:
+                by.append("Cognome e Nome")
+            if "Inizio" in g.columns:
+                by.append("Inizio")
+            if by:
+                g = g.sort_values(by=by).reset_index(drop=True)
+
+            # compattamento: non ripetere Nome/Matricola per la stessa persona
+            if {"Cognome e Nome", "Matricola"}.issubset(g.columns):
+                same_person = (
+                    g[["Cognome e Nome", "Matricola"]]
+                    .eq(g[["Cognome e Nome", "Matricola"]].shift(1))
+                ).all(axis=1)
+                g.loc[same_person, ["Cognome e Nome", "Matricola"]] = ""
+
+        st.markdown(f"### **{res}**")
+        g_nosede = g.drop(columns=["Residenza"], errors="ignore")
+        st.dataframe(g_nosede, use_container_width=True, hide_index=True)
+else:
+    st.dataframe(df_out, use_container_width=True, hide_index=True)
+
 
         # Download Excel (senza Residenza)
         xls_buf = io.BytesIO()
