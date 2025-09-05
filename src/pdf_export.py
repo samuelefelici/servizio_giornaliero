@@ -144,7 +144,7 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
     elems = []
 
     # Intestazione
-    header_text = f"{title} — {meta.get('data','')} — {meta.get('giorno','')}"
+    header_text = f"Servizio Giornaliero: {meta.get('giorno','')} {meta.get('data','')}"
     elems.append(Paragraph(header_text, title_style))
 
     if logo_path and logo_path.exists():
