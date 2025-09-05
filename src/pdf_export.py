@@ -4,14 +4,14 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.lib.units import mm
+from xml.sax.saxutils import escape
 import pandas as pd
 from pathlib import Path
 import re
 
 from .constants import DISPLAY_ORDER
 
-# riposi: non vanno in grassetto
-REST_CODES = {"R", "RR"}
+REST_CODES = {"R", "RR"}  # riposo
 
 # ---------- helper prefissi deposito/turno ----------
 def _res_to_prefix(res: str) -> str | None:
@@ -30,54 +30,46 @@ def _res_to_prefix(res: str) -> str | None:
     return None
 
 def _turno_bucket(turno: str) -> str | None:
-    """
-    'JU…' -> 'JU' ; 'J…' (non JU) -> 'J' ; altri -> prima lettera.
-    Esclude 'ASSENTE' e riposi R/RR (ritorna None).
-    """
     if not isinstance(turno, str): turno = str(turno)
-    s = turno.strip().upper()
-    if not s or s == "ASSENTE" or s in REST_CODES:
+    s = turno.strip()
+    if not s or s.upper() == "ASSENTE" or s.upper() in REST_CODES:
         return None
-    m = re.match(r"[A-Z]+", s)
+    m = re.match(r"[A-Za-z]+", s)
     if not m: return None
-    up = m.group(0)
+    up = m.group(0).upper()
     if up.startswith("JU"): return "JU"
     if up.startswith("J"):  return "J"
     return up[0]
 
 def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
-    # J e JU sono equivalenti
     if prefix in ("J", "JU"): return {"J", "JU"}
     return {prefix} if prefix else set()
 
 def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
-    """
-    True per le righe in 'trasferta': bucket turno NON appartiene ai prefissi accettati
-    per la residenza. Esclude ASSENTE e R/RR.
-    """
+    """True se la riga è in 'trasferta' (J/JU equivalenti; esclude Assente e R/RR)."""
     if "Residenza" not in df.columns or "Turno" not in df.columns:
         return pd.Series(False, index=df.index)
 
-    expected = df["Residenza"].apply(_res_to_prefix)            # Series[str|None]
-    actual   = df["Turno"].apply(_turno_bucket)                 # Series[str|None] (None se Assente/R/RR)
-    accepted = expected.map(_accepted_prefixes_for_res)         # Series[set]
+    def _is_trasferta(row) -> bool:
+        turn = str(row["Turno"]).strip().upper()
+        if turn in REST_CODES or turn == "ASSENTE":
+            return False
+        rp = _res_to_prefix(row["Residenza"])
+        tb = _turno_bucket(row["Turno"])
+        if rp is None or tb is None:
+            return False
+        return tb not in _accepted_prefixes_for_res(rp)
 
-    # membership vettoriale: a in acc (con gestione None)
-    in_home = pd.Series(
-        [(a is not None) and (acc is not None) and (a in acc)
-         for a, acc in zip(actual, accepted)],
-        index=df.index
-    )
-
-    # trasferta = valori validi & non in-home
-    return actual.notna() & expected.notna() & (~in_home)
+    return df.apply(_is_trasferta, axis=1)
 
 # ---------- shaping tabella ----------
 def _collapse_repeats(gdf: pd.DataFrame,
                       key_cols=("Cognome e Nome", "Matricola"),
                       collapse_cols=("Cognome e Nome", "Matricola")) -> pd.DataFrame:
+    """Sui record consecutivi della stessa persona azzera i campi ripetitivi."""
     missing = [c for c in key_cols if c not in gdf.columns]
-    if missing: return gdf
+    if missing:
+        return gdf
     g = gdf.copy()
     dup_mask = (g[list(key_cols)] == g[list(key_cols)].shift(1)).all(axis=1)
     for c in collapse_cols:
@@ -85,70 +77,70 @@ def _collapse_repeats(gdf: pd.DataFrame,
             g.loc[dup_mask, c] = ""
     return g
 
-def _table_data_for(df: pd.DataFrame):
+def _table_data_for(df: pd.DataFrame, para_style: ParagraphStyle):
+    """
+    Applica DISPLAY_ORDER, rimuove 'Residenza' e converte la colonna Note in Paragraph
+    per il word-wrapping.
+    """
     cols = [c for c in DISPLAY_ORDER if c in df.columns]
     dfp = df.copy()
-    if cols: dfp = dfp[cols]
+    if cols:
+        dfp = dfp[cols]
     dfp = dfp.drop(columns=["Residenza"], errors="ignore")
+
     header = list(dfp.columns)
     rows = dfp.fillna("").values.tolist()
+
+    # trasforma "Indennità e note" in Paragraph per andare a capo
+    if "Indennità e note" in header:
+        idx_note = header.index("Indennità e note")
+        for r in rows:
+            r[idx_note] = Paragraph(escape(str(r[idx_note])), para_style)
+
     return [header] + rows
 
-def _col_widths(header: list[str], avail_width: float) -> list[float]:
+def _calc_col_widths(page_width_mm: float) -> list:
     """
-    Usa tutta la larghezza disponibile. Tutte le colonne hanno larghezza fissa
-    tranne 'Indennità e note'/'Note' che prende lo spazio residuo.
+    Calcola larghezze colonne in mm usando tutto lo spazio disponibile.
+    Ordine colonne: Matricola, Cognome e Nome, Turno, Inizio, Fine, Indennità e note
     """
-    FIXED = {
-        "Matricola": 22*mm,
-        "Cognome e Nome": 62*mm,
-        "Turno": 24*mm,
-        "Inizio": 18*mm,
-        "Fine": 18*mm,
-    }
-    NOTE_NAMES = {"Indennità e note", "Note"}
-    fixed_sum = sum(FIXED.get(h, 0) for h in header if h not in NOTE_NAMES)
-    has_note = any(h in NOTE_NAMES for h in header)
-
-    widths = []
-    if has_note:
-        min_note = 30*mm
-        if fixed_sum > max(0, avail_width - min_note) and fixed_sum > 0:
-            scale = (avail_width - min_note) / fixed_sum
-            for h in header:
-                widths.append(min_note if h in NOTE_NAMES else FIXED.get(h, 18*mm) * scale)
-            used = sum(w for h, w in zip(header, widths) if h not in NOTE_NAMES)
-            note_w = max(min_note, avail_width - used)
-            widths = [note_w if h in NOTE_NAMES else w for h, w in zip(header, widths)]
-        else:
-            used = sum(FIXED.get(h, 18*mm) for h in header if h not in NOTE_NAMES)
-            note_w = max(min_note, avail_width - used)
-            for h in header:
-                widths.append(note_w if h in NOTE_NAMES else FIXED.get(h, 18*mm))
-    else:
-        if fixed_sum == 0:
-            widths = [avail_width/len(header)]*len(header)
-        else:
-            for h in header:
-                widths.append(FIXED.get(h, 18*mm) / fixed_sum * avail_width)
-    return widths
+    # larghezze “minime” per le prime 5
+    w_matricola = 24 * mm
+    w_nome      = 60 * mm
+    w_turno     = 22 * mm
+    w_inizio    = 18 * mm
+    w_fine      = 18 * mm
+    used = w_matricola + w_nome + w_turno + w_inizio + w_fine
+    w_note = max(30 * mm, page_width_mm - used)  # il resto alla colonna Note (min 30mm)
+    return [w_matricola, w_nome, w_turno, w_inizio, w_fine, w_note]
 
 # ---------- build PDF ----------
 def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
               logo_path: Path | None = None, title: str = "Servizio Giornaliero",
               inner_sort: str = "nome"):
-    doc = SimpleDocTemplate(
-        str(path_out), pagesize=A4,
-        rightMargin=10*mm, leftMargin=10*mm,
-        topMargin=12*mm, bottomMargin=12*mm
-    )
+    """
+    Crea un PDF raggruppato per Residenza.
+    - Usa tutta la larghezza della pagina, la colonna Note prende lo spazio residuo
+    - Word-wrap nelle Note
+    - Grassetto Turno/Inizio/Fine per le trasferte (J/JU equivalenti; R/RR NON in grassetto)
+    """
+    # Margini e doc
+    right=10*mm; left=10*mm; top=12*mm; bottom=12*mm
+    doc = SimpleDocTemplate(str(path_out), pagesize=A4,
+                            rightMargin=right, leftMargin=left,
+                            topMargin=top, bottomMargin=bottom)
+    page_w = A4[0] - left - right
+
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle("TitleTight", parent=styles["Title"], spaceAfter=0, spaceBefore=0)
     group_style = ParagraphStyle("GroupTitle", parent=styles["Heading2"],
                                  fontSize=14, leading=16, spaceBefore=6, spaceAfter=2)
+    note_style  = ParagraphStyle("NoteBody", parent=styles["BodyText"],
+                                 leading=12, wordWrap="CJK")  # wrap aggressivo se ci sono parole lunghe
 
     elems = []
 
+    # Intestazione
     header_text = f"{title} — {meta.get('data','')} — {meta.get('giorno','')}"
     elems.append(Paragraph(header_text, title_style))
 
@@ -166,7 +158,7 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
 
     first_block = True
     for res_name, gdf in blocks:
-        # sort interno
+        # Ordinamento interno
         if inner_sort == "inizio" and "Inizio" in gdf.columns:
             by = ["Inizio"] + (["Cognome e Nome"] if "Cognome e Nome" in gdf.columns else [])
             gdf = gdf.sort_values(by=by).reset_index(drop=True)
@@ -174,10 +166,12 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
             by = []
             if "Cognome e Nome" in gdf.columns: by.append("Cognome e Nome")
             if "Inizio" in gdf.columns:         by.append("Inizio")
-            if by: gdf = gdf.sort_values(by=by).reset_index(drop=True)
-            gdf = _collapse_repeats(gdf,
-                                    key_cols=("Cognome e Nome","Matricola"),
-                                    collapse_cols=("Cognome e Nome","Matricola"))
+            if by:
+                gdf = gdf.sort_values(by=by).reset_index(drop=True)
+            gdf = _collapse_repeats(
+                gdf, key_cols=("Cognome e Nome", "Matricola"),
+                collapse_cols=("Cognome e Nome", "Matricola")
+            )
 
         trasferte = _trasferta_mask(gdf)
 
@@ -185,34 +179,36 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
             elems.append(Spacer(1, 3*mm))
         first_block = False
 
+        # Titolo gruppo
         elems.append(Paragraph(res_name, group_style))
 
-        data = _table_data_for(gdf)
+        # Dati tabella
+        data   = _table_data_for(gdf, note_style)
         header = data[0]
-
-        avail_width = A4[0] - doc.leftMargin - doc.rightMargin
-        col_widths = _col_widths(header, avail_width)
-
-        col_idx = {name: header.index(name) for name in ["Turno", "Inizio", "Fine"] if name in header}
+        col_idx = {name: header.index(name) for name in ["Turno","Inizio","Fine"] if name in header}
         idx_inizio = col_idx.get("Inizio")
         idx_fine   = col_idx.get("Fine")
+
+        # Larghezze colonne per sfruttare tutta la pagina
+        col_widths = _calc_col_widths(page_w)
 
         tbl = Table(data, repeatRows=1, colWidths=col_widths)
 
         base_style = [
-            ("GRID",       (0, 0), (-1, -1), 0.25, colors.grey),
-            ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
-            ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("VALIGN",     (0, 0), (-1, -1), "TOP"),
+            ("GRID",       (0,0), (-1,-1), 0.25, colors.grey),
+            ("BACKGROUND", (0,0), (-1,0), colors.whitesmoke),
+            ("FONTNAME",   (0,0), (-1,0), "Helvetica-Bold"),
+            ("VALIGN",     (0,0), (-1,-1), "TOP"),
         ]
         if idx_inizio is not None:
-            base_style.append(("ALIGN", (idx_inizio, 1), (idx_inizio, -1), "CENTER"))
+            base_style.append(("ALIGN", (idx_inizio,1), (idx_inizio,-1), "CENTER"))
         if idx_fine is not None:
-            base_style.append(("ALIGN", (idx_fine, 1), (idx_fine, -1), "CENTER"))
+            base_style.append(("ALIGN", (idx_fine,1), (idx_fine,-1), "CENTER"))
 
-        # Bold per trasferte solo su Turno/Inizio/Fine
+        # Grassetto per trasferte (solo Turno/Inizio/Fine)
         for i, is_tr in enumerate(trasferte.tolist(), start=1):
-            if not is_tr: continue
+            if not is_tr:
+                continue
             for cidx in col_idx.values():
                 base_style.append(("FONTNAME", (cidx, i), (cidx, i), "Helvetica-Bold"))
 
