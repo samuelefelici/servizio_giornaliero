@@ -6,9 +6,40 @@ from reportlab.lib.units import mm
 import pandas as pd
 from pathlib import Path
 from .constants import DISPLAY_ORDER
+import re
+from .constants import DISPLAY_ORDER
+
 
 # colonne da stampare (senza Residenza)
 _PRINT_COLS = ["Cognome e Nome", "Matricola", "Turno", "Inizio", "Fine", "Indennità e note"]
+
+def _res_to_prefix(res: str) -> str | None:
+    if not isinstance(res, str): return None
+    r = res.upper().replace("_", " ")
+    if "JESI URBANO" in r or r.strip() == "JU": return "JU"
+    if "JESI" in r or r.strip() == "J": return "J"
+    if "MARINA" in r or r.strip() == "M": return "M"
+    if "CASTELFIDARDO" in r or "C.FID" in r or r.strip() == "C": return "C"
+    if "OSIMO" in r or r.strip() == "O": return "O"
+    if "FILOTTRANO" in r or "FILOT" in r or r.strip() == "F": return "F"
+    if "POLVERIGI" in r or r.strip() == "P": return "P"
+    if "OSTRA" in r or r.strip() == "D": return "D"
+    if "BELVED" in r or r.strip() == "B" or "DEPBELVE" in r: return "B"
+    if "ANCONA" in r or r.strip() == "A": return "A"
+    return None
+
+def _turno_prefix(turno: str) -> str | None:
+    if not isinstance(turno, str): turno = str(turno)
+    m = re.match(r"[A-Za-z]+", turno.strip())
+    return m.group(0).upper() if m else None
+
+def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
+    if "Residenza" not in df.columns or "Turno" not in df.columns:
+        return pd.Series(False, index=df.index)
+    expected = df["Residenza"].apply(_res_to_prefix)
+    actual = df["Turno"].astype(str).apply(_turno_prefix)
+    return expected.notna() & actual.notna() & (expected != actual)
+
 
 def _table_data_for(df: pd.DataFrame):
     # Applica l’ordine standard e ignora "Residenza" se presente
