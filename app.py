@@ -1,5 +1,6 @@
 import os, sys
 from pathlib import Path
+from src.constants import TITLE, DISPLAY_ORDER  # <-- usiamo anche DISPLAY_ORDER
 
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
@@ -12,7 +13,6 @@ import io, tempfile
 try:
     from src.process import read_input_excel, transform_dataframe
     from src.pdf_export import build_pdf
-    from src.constants import TITLE
 except Exception as e:
     import traceback
     st.set_page_config(page_title="Servizio Giornaliero", layout="wide")
@@ -47,6 +47,12 @@ with col2:
 
 debug_mode = st.checkbox("🧪 Modalità debug", value=False)
 
+# Helper: riordina e rimuove 'Residenza' per visualizzazione/export
+def _reorder_for_display(df: pd.DataFrame) -> pd.DataFrame:
+    df2 = df.drop(columns=["Residenza"], errors="ignore").copy()
+    cols = [c for c in DISPLAY_ORDER if c in df2.columns]
+    return df2[cols] if cols else df2
+
 if st.button("▶️ Elabora"):
     if not uploaded:
         st.warning("Carica prima un file.")
@@ -78,9 +84,11 @@ if st.button("▶️ Elabora"):
             if nascosti > 0:
                 st.info(f"Righe 'Assente' nascoste: {nascosti}")
 
-        # Anteprima per deposito (senza colonna Residenza)
-        st.success(f"File elaborato. Data: {meta.get('data','?')} – {meta.get('giorno','?')} "
-                   f"(fonte: {meta.get('origine','?')})")
+        # Anteprima per deposito
+        st.success(
+            f"File elaborato. Data: {meta.get('data','?')} – {meta.get('giorno','?')} "
+            f"(fonte: {meta.get('origine','?')})"
+        )
         st.subheader("Anteprima per deposito")
 
         if "Residenza" in df_view.columns:
@@ -113,17 +121,17 @@ if st.button("▶️ Elabora"):
                         g.loc[same_person, ["Cognome e Nome", "Matricola"]] = ""
 
                 st.markdown(f"### **{res}**")
-                g_nosede = g.drop(columns=["Residenza"], errors="ignore")
-                st.dataframe(g_nosede, use_container_width=True, hide_index=True)
+                g_disp = _reorder_for_display(g)
+                st.dataframe(g_disp, use_container_width=True, hide_index=True)
         else:
-            st.dataframe(df_view, use_container_width=True, hide_index=True)
+            df_tmp = _reorder_for_display(df_view)
+            st.dataframe(df_tmp, use_container_width=True, hide_index=True)
 
-        # Download Excel (senza Residenza, coerente col filtro 'Assente')
+        # Download Excel (coerente col filtro 'Assente' e ordine colonne)
         xls_buf = io.BytesIO()
         with pd.ExcelWriter(xls_buf, engine="openpyxl") as writer:
-            df_view.drop(columns=["Residenza"], errors="ignore").to_excel(
-                writer, sheet_name="ServizioGiornaliero", index=False
-            )
+            to_xls = _reorder_for_display(df_view)
+            to_xls.to_excel(writer, sheet_name="ServizioGiornaliero", index=False)
         st.download_button(
             "⬇️ Scarica Excel",
             data=xls_buf.getvalue(),
@@ -148,4 +156,3 @@ if st.button("▶️ Elabora"):
             )
 
     except Exception as e:
-        st.error(f"Errore durante l'elaborazione: {e}")
