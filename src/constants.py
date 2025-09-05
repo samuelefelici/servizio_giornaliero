@@ -24,3 +24,14 @@ EXPECTED_COLUMNS = [
 DEFAULT_SORT = ["Residenza", "Turno", "Inizio"]
 
 TITLE = "Servizio Giornaliero"
+
+# Ordine colonne standard per output (anteprima, Excel, PDF)
+DISPLAY_ORDER = [
+    "Matricola",
+    "Cognome e Nome",
+    "Turno",
+    "Inizio",
+    "Fine",
+    "Indennità e note",
+]
+
