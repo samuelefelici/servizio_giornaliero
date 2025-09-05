@@ -8,8 +8,9 @@ import pandas as pd
 from pathlib import Path
 import re
 
-from .constants import DISPLAY_ORDER  # ordine: Matricola, Cognome e Nome, Turno, Inizio, Fine, Indennità e note
+from .constants import DISPLAY_ORDER  # Matricola, Cognome e Nome, Turno, Inizio, Fine, Indennità e note
 
+REST_CODES = {"R", "RR"}  # turni di riposo: mai in grassetto
 
 # ---------- helper prefissi deposito/turno ----------
 def _res_to_prefix(res: str) -> str | None:
@@ -17,28 +18,17 @@ def _res_to_prefix(res: str) -> str | None:
     if not isinstance(res, str):
         return None
     r = res.upper().replace("_", " ").strip()
-    if "JESI URBANO" in r or r == "JU":
-        return "JU"
-    if "JESI" in r or r == "J":
-        return "J"
-    if "MARINA" in r or r == "M":
-        return "M"
-    if "CASTELFIDARDO" in r or "C.FID" in r or r == "C":
-        return "C"
-    if "OSIMO" in r or r == "O":
-        return "O"
-    if "FILOTTRANO" in r or "FILOT" in r or r == "F":
-        return "F"
-    if "POLVERIGI" in r or r == "P":
-        return "P"
-    if "OSTRA" in r or r == "D":
-        return "D"
-    if "BELVED" in r or r == "B" or "DEPBELVE" in r:
-        return "B"
-    if "ANCONA" in r or r == "A":
-        return "A"
+    if "JESI URBANO" in r or r == "JU": return "JU"
+    if "JESI" in r or r == "J":         return "J"
+    if "MARINA" in r or r == "M":       return "M"
+    if "CASTELFIDARDO" in r or "C.FID" in r or r == "C": return "C"
+    if "OSIMO" in r or r == "O":        return "O"
+    if "FILOTTRANO" in r or "FILOT" in r or r == "F":    return "F"
+    if "POLVERIGI" in r or r == "P":    return "P"
+    if "OSTRA" in r or r == "D":        return "D"
+    if "BELVED" in r or r == "B" or "DEPBELVE" in r:     return "B"
+    if "ANCONA" in r or r == "A":       return "A"
     return None
-
 
 def _turno_bucket(turno: str) -> str | None:
     """
@@ -46,23 +36,23 @@ def _turno_bucket(turno: str) -> str | None:
       - 'JU…' -> 'JU'
       - 'J…'  (non JU) -> 'J'
       - altri -> prima lettera (M, C, O, F, P, D, A, B…)
-    Esclude 'Assente'.
+    Esclude 'Assente' e i riposi R/RR.
     """
     if not isinstance(turno, str):
         turno = str(turno)
     s = turno.strip()
-    if not s or s.upper() == "ASSENTE":
+    if not s:
+        return None
+    up_full = s.upper()
+    if up_full == "ASSENTE" or up_full in REST_CODES:
         return None
     m = re.match(r"[A-Za-z]+", s)
     if not m:
         return None
     up = m.group(0).upper()
-    if up.startswith("JU"):
-        return "JU"
-    if up.startswith("J"):
-        return "J"
+    if up.startswith("JU"): return "JU"
+    if up.startswith("J"):  return "J"
     return up[0]
-
 
 def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
     """Prefissi considerati 'di casa' per la residenza (J e JU sono equivalenti)."""
@@ -70,16 +60,18 @@ def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
         return {"J", "JU"}
     return {prefix} if prefix else set()
 
-
 def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
     """
     True se la riga è in 'trasferta' (turno non appartiene ai prefissi accettati).
-    Considera J e JU equivalenti; esclude 'Assente' e righe incomplete.
+    Considera J e JU equivalenti; esclude 'Assente' e R/RR.
     """
     if "Residenza" not in df.columns or "Turno" not in df.columns:
         return pd.Series(False, index=df.index)
 
     def _is_trasferta(row) -> bool:
+        turn = str(row["Turno"]).strip().upper()
+        if turn in REST_CODES or turn == "ASSENTE":
+            return False
         rp = _res_to_prefix(row["Residenza"])
         tb = _turno_bucket(row["Turno"])
         if rp is None or tb is None:
@@ -87,7 +79,6 @@ def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
         return tb not in _accepted_prefixes_for_res(rp)
 
     return df.apply(_is_trasferta, axis=1)
-
 
 # ---------- shaping tabella ----------
 def _collapse_repeats(gdf: pd.DataFrame,
@@ -104,7 +95,6 @@ def _collapse_repeats(gdf: pd.DataFrame,
             g.loc[dup_mask, c] = ""
     return g
 
-
 def _table_data_for(df: pd.DataFrame):
     """Applica DISPLAY_ORDER e rimuove 'Residenza' se presente."""
     cols = [c for c in DISPLAY_ORDER if c in df.columns]
@@ -115,7 +105,6 @@ def _table_data_for(df: pd.DataFrame):
     header = list(dfp.columns)  # manteniamo "Indennità e note"
     rows = dfp.fillna("").values.tolist()
     return [header] + rows
-
 
 # ---------- build PDF ----------
 def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
@@ -194,7 +183,7 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
         # Indici dinamici per colonne interessate
         col_idx = {name: header.index(name) for name in ["Turno", "Inizio", "Fine"] if name in header}
         idx_inizio = col_idx.get("Inizio")
-        idx_fine = col_idx.get("Fine")
+        idx_fine   = col_idx.get("Fine")
 
         tbl = Table(data, repeatRows=1)
 
