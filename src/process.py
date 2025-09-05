@@ -163,23 +163,29 @@ def parse_date_and_day(df_raw: pd.DataFrame) -> tuple[str, str]:
 def read_input_excel(file) -> tuple[pd.DataFrame, dict]:
     """
     Legge il file, pulisce spazi/NBSP, trova l'intestazione,
-    seleziona le colonne attese, normalizza orari.
+    seleziona le colonne attese, rimuove righe vuote, normalizza orari.
     """
     df_raw, origine = _read_excel_robusto(file)
 
-    # pulizia preliminare (trim su stringhe e NBSP)
+    # Pulizia preliminare (trim su stringhe e NBSP)
     df_raw = clean_spaces(df_raw)
 
+    # Meta (data e giorno) dalle prime righe
     date_str, day_str = parse_date_and_day(df_raw)
+
+    # Trova la riga di intestazione (es. "Cognome e Nome")
     hdr_row = find_header_row(df_raw, HEADER_PROBE)
     if hdr_row is None:
         raise ValueError(f"Intestazione '{HEADER_PROBE}' non trovata.")
 
-    # prendi tutte le colonne dopo l'header; poi seleziona per nome
+    # Prendi tutte le colonne dall'header in poi
     df = df_raw.iloc[hdr_row:, :].copy()
+    # Nomi colonna ripuliti
     df.columns = clean_column_names(df.iloc[0].tolist())
+    # Rimuove la riga header duplicata
     df = df.iloc[1:].reset_index(drop=True)
 
+    # Tieni solo le colonne attese che esistono davvero
     keep_cols = [c for c in EXPECTED_COLUMNS if c in df.columns]
     if not keep_cols:
         raise ValueError(
@@ -188,9 +194,23 @@ def read_input_excel(file) -> tuple[pd.DataFrame, dict]:
             + ", ".join(EXPECTED_COLUMNS)
         )
     df = df[keep_cols].copy()
+
+    # Pulizia finale su celle stringa
     df = clean_spaces(df)
 
-    # tipizzazioni / orari
+    # ✅ Elimina righe completamente vuote sulle colonne utili
+    def _row_is_empty(row) -> bool:
+        for v in row:
+            if pd.isna(v):
+                continue
+            if isinstance(v, str) and v.strip() == "":
+                continue
+            return False
+        return True
+
+    df = df[~df.apply(_row_is_empty, axis=1)].reset_index(drop=True)
+
+    # Tipizzazioni / orari
     if "Matricola" in df.columns:
         df["Matricola"] = df["Matricola"].astype(str).str.strip()
     if "Inizio" in df.columns:
@@ -200,6 +220,7 @@ def read_input_excel(file) -> tuple[pd.DataFrame, dict]:
 
     meta = {"data": date_str, "giorno": day_str, "origine": origine}
     return df, meta
+
 
 # ----------------------- Trasformazione (senza riepilogo) -----------------------
 
