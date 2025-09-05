@@ -1,18 +1,20 @@
-import os, sys, re
+# app.py
+import os, sys, re, io, tempfile
 from pathlib import Path
-from src.constants import TITLE, DISPLAY_ORDER  # <-- usiamo anche DISPLAY_ORDER
 
+# --- Path per import locali ---
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import streamlit as st
 import pandas as pd
-import io, tempfile
 
+# --- Import moduli del progetto (con gestione errore) ---
 try:
-    from src.process import read_input_excel, transform_dataframe
+    from src.process import read_input_excel, transform_dataframe, debug_probe  # debug_probe opzionale
     from src.pdf_export import build_pdf
+    from src.constants import TITLE, DISPLAY_ORDER
 except Exception as e:
     import traceback
     st.set_page_config(page_title="Servizio Giornaliero", layout="wide")
@@ -20,17 +22,60 @@ except Exception as e:
     st.code("".join(traceback.format_exception(*sys.exc_info())))
     st.stop()
 
+# --- Config pagina ---
 st.set_page_config(page_title="Servizio Giornaliero", layout="wide")
 st.title("📋 Servizio Giornaliero – ExtraUrbano (Python)")
-st.caption("Drag & drop del file Excel (.xls/.xlsx), pulizia automatica ed export in PDF (raggruppato per deposito).")
+st.caption("Drag & drop del file Excel (.xls/.xlsx), pulizia automatica, anteprima e export PDF/Excel (raggruppato per deposito).")
 
 cfg_dir = Path("config")
 assets_dir = Path("assets")
 logo_path = assets_dir / "logo.jpg"
 
+# ====================== Helper ======================
+
+def _reorder_for_display(df: pd.DataFrame) -> pd.DataFrame:
+    """Ordina colonne secondo DISPLAY_ORDER e nasconde 'Residenza' nella vista/export."""
+    df2 = df.drop(columns=["Residenza"], errors="ignore").copy()
+    cols = [c for c in DISPLAY_ORDER if c in df2.columns]
+    return df2[cols] if cols else df2
+
+def _res_to_prefix(res: str) -> str | None:
+    """Mappa il nome deposito al prefisso atteso del turno."""
+    if not isinstance(res, str):
+        return None
+    r = res.upper().replace("_", " ")
+    if "JESI URBANO" in r or r.strip() == "JU": return "JU"
+    if "JESI" in r or r.strip() == "J":       return "J"
+    if "MARINA" in r or r.strip() == "M":     return "M"
+    if "CASTELFIDARDO" in r or "C.FID" in r or r.strip() == "C": return "C"
+    if "OSIMO" in r or r.strip() == "O":      return "O"
+    if "FILOTTRANO" in r or "FILOT" in r or r.strip() == "F":    return "F"
+    if "POLVERIGI" in r or r.strip() == "P":  return "P"
+    if "OSTRA" in r or r.strip() == "D":      return "D"
+    if "BELVED" in r or r.strip() == "B" or "DEPBELVE" in r:     return "B"
+    if "ANCONA" in r or r.strip() == "A":     return "A"
+    return None
+
+def _turno_prefix(turno: str) -> str | None:
+    """Estrae il prefisso alfabetico da un codice turno (es. JU19 -> JU, M150a -> M)."""
+    if not isinstance(turno, str):
+        turno = str(turno)
+    m = re.match(r"[A-Za-z]+", turno.strip())
+    return m.group(0).upper() if m else None
+
+def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
+    """True se il prefisso del turno è diverso da quello atteso per la residenza."""
+    if "Residenza" not in df.columns or "Turno" not in df.columns:
+        return pd.Series(False, index=df.index)
+    expected = df["Residenza"].apply(_res_to_prefix)
+    actual   = df["Turno"].astype(str).apply(_turno_prefix)
+    return expected.notna() & actual.notna() & (expected != actual)
+
+# ====================== UI ======================
+
 uploaded = st.file_uploader("Trascina qui il file oppure selezionalo", type=["xls","xlsx"])
 
-col1, col2 = st.columns([1,1])
+col1, col2 = st.columns([1,1], vertical_alignment="center")
 with col1:
     inner_sort_choice = st.radio(
         "Ordina dentro ciascun deposito per:",
@@ -45,23 +90,18 @@ with col2:
         help="Se deselezionato nasconde le righe con Turno = Assente (vale per anteprima ed export)."
     )
 
-debug_mode = st.checkbox("🧪 Modalità debug", value=False)
+debug_mode = st.checkbox("🧪 Modalità debug", value=False, help="Mostra info sniffer/header del file caricato.")
 
-# Helper: riordina e rimuove 'Residenza' per visualizzazione/export
-def _reorder_for_display(df: pd.DataFrame) -> pd.DataFrame:
-    df2 = df.drop(columns=["Residenza"], errors="ignore").copy()
-    cols = [c for c in DISPLAY_ORDER if c in df2.columns]
-    return df2[cols] if cols else df2
+# ====================== Azione ======================
 
-if st.button("▶️ Elabora"):
+if st.button("▶️ Elabora", type="primary", use_container_width=True):
     if not uploaded:
         st.warning("Carica prima un file.")
         st.stop()
 
-    # Debug opzionale (prima della lettura 'vera' per non alterare lo stream)
+    # Debug opzionale (si esegue su stream; la nostra lettura fa seek(0) quindi va bene)
     if debug_mode:
         try:
-            from src.process import debug_probe
             info = debug_probe(uploaded)
             with st.expander("Dettagli debug (header/sniffer)"):
                 st.json(info)
@@ -69,28 +109,27 @@ if st.button("▶️ Elabora"):
             st.warning(f"Debug non riuscito: {e}")
 
     try:
-        # Lettura + pipeline base (filtri matricole/turni, rinomine, 'Assente', ordinamenti)
+        # Lettura + pipeline base
         df, meta = read_input_excel(uploaded)
-        df_out = transform_dataframe(df, cfg_dir)
+        df_out   = transform_dataframe(df, cfg_dir)
 
-        # Applica filtro "Assente" alla vista (e agli export)
+        # Filtro Assente per vista/export
         df_view = df_out.copy()
         if not show_absent and "Turno" in df_view.columns:
-            df_view = (
-                df_view[df_view["Turno"].astype(str).str.strip() != "Assente"]
-                .reset_index(drop=True)
-            )
-            nascosti = len(df_out) - len(df_view)
-            if nascosti > 0:
-                st.info(f"Righe 'Assente' nascoste: {nascosti}")
+            before = len(df_view)
+            df_view = df_view[df_view["Turno"].astype(str).str.strip() != "Assente"].reset_index(drop=True)
+            hidden = before - len(df_view)
+            if hidden > 0:
+                st.info(f"Righe 'Assente' nascoste: {hidden}")
 
-        # Anteprima per deposito
+        # Feedback meta
         st.success(
             f"File elaborato. Data: {meta.get('data','?')} – {meta.get('giorno','?')} "
             f"(fonte: {meta.get('origine','?')})"
         )
         st.subheader("Anteprima per deposito")
 
+        # Anteprima per deposito con grassetto per trasferte
         if "Residenza" in df_view.columns:
             res_list = sorted(df_view["Residenza"].dropna().astype(str).unique())
             for res in res_list:
@@ -112,40 +151,38 @@ if st.button("▶️ Elabora"):
                         by.append("Inizio")
                     if by:
                         g = g.sort_values(by=by).reset_index(drop=True)
-
-                    # Compattazione: non ripetere Nome/Matricola per righe consecutive della stessa persona
+                    # Compattazione: non ripetere Nome/Matricola su righe consecutive uguali
                     if {"Cognome e Nome", "Matricola"}.issubset(g.columns):
                         same_person = g[["Cognome e Nome", "Matricola"]].eq(
                             g[["Cognome e Nome", "Matricola"]].shift(1)
                         ).all(axis=1)
                         g.loc[same_person, ["Cognome e Nome", "Matricola"]] = ""
 
-st.markdown(f"### **{res}**")
-g_disp = _reorder_for_display(g)
+                st.markdown(f"### **{res}**")
 
-# calcola maschera di trasferta sulla tabella originale 'g'
-mask = _trasferta_mask(g)
+                # Reorder/drop per visualizzazione
+                g_disp = _reorder_for_display(g)
 
-# applica bold solo a Turno/Inizio/Fine (se presenti)
-subset_cols = [c for c in ["Turno", "Inizio", "Fine"] if c in g_disp.columns]
-if subset_cols:
-    def _bold_if_trasferta(row):
-        # row contiene solo le colonne del subset (grazie a subset=...)
-        return ["font-weight: bold"] * len(row) if mask.loc[row.name] else [""] * len(row)
-    styled = g_disp.style.apply(_bold_if_trasferta, axis=1, subset=subset_cols)
-    st.dataframe(styled, use_container_width=True, hide_index=True)
-else:
-    st.dataframe(g_disp, use_container_width=True, hide_index=True)
+                # Bold per trasferte: calcolo sulla tabella originale 'g' (indici allineati)
+                mask = _trasferta_mask(g)
+                subset_cols = [c for c in ["Turno", "Inizio", "Fine"] if c in g_disp.columns]
 
+                if subset_cols:
+                    def _bold_if_trasferta(row):
+                        return (["font-weight: bold"] * len(row)) if mask.loc[row.name] else ([""] * len(row))
+
+                    styled = g_disp.style.apply(_bold_if_trasferta, axis=1, subset=subset_cols)
+                    st.dataframe(styled, use_container_width=True, hide_index=True)
+                else:
+                    st.dataframe(g_disp, use_container_width=True, hide_index=True)
         else:
-            df_tmp = _reorder_for_display(df_view)
-            st.dataframe(df_tmp, use_container_width=True, hide_index=True)
+            # Nessuna Residenza: mostra tabella piatta
+            st.dataframe(_reorder_for_display(df_view), use_container_width=True, hide_index=True)
 
-        # Download Excel (coerente col filtro 'Assente' e ordine colonne)
+        # --- Export Excel (ordine colonne, filtro Assente applicato) ---
         xls_buf = io.BytesIO()
         with pd.ExcelWriter(xls_buf, engine="openpyxl") as writer:
-            to_xls = _reorder_for_display(df_view)
-            to_xls.to_excel(writer, sheet_name="ServizioGiornaliero", index=False)
+            _reorder_for_display(df_view).to_excel(writer, sheet_name="ServizioGiornaliero", index=False)
         st.download_button(
             "⬇️ Scarica Excel",
             data=xls_buf.getvalue(),
@@ -153,7 +190,7 @@ else:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-        # PDF raggruppato per Residenza (coerente col filtro 'Assente')
+        # --- Export PDF (stessa logica, il grassetto per trasferte è gestito in pdf_export.py) ---
         with tempfile.TemporaryDirectory() as td:
             pdf_path = Path(td) / "ServizioGiornaliero.pdf"
             inner_sort = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
@@ -168,48 +205,6 @@ else:
                 file_name="ServizioGiornaliero.pdf",
                 mime="application/pdf"
             )
-
-    def _res_to_prefix(res: str) -> str | None:
-    if not isinstance(res, str):
-        return None
-    r = res.upper().replace("_", " ")
-    # gestisci alias/abbreviazioni frequenti
-    if "JESI URBANO" in r or r.strip() == "JU":
-        return "JU"
-    if "JESI" in r or r.strip() == "J":
-        return "J"
-    if "MARINA" in r or r.strip() == "M":
-        return "M"
-    if "CASTELFIDARDO" in r or "C.FID" in r or r.strip() == "C":
-        return "C"
-    if "OSIMO" in r or r.strip() == "O":
-        return "O"
-    if "FILOTTRANO" in r or "FILOT" in r or r.strip() == "F":
-        return "F"
-    if "POLVERIGI" in r or r.strip() == "P":
-        return "P"
-    if "OSTRA" in r or r.strip() == "D":
-        return "D"
-    if "BELVED" in r or r.strip() == "B" or "DEPBELVE" in r:
-        return "B"
-    if "ANCONA" in r or r.strip() == "A":
-        return "A"
-    return None
-
-def _turno_prefix(turno: str) -> str | None:
-    if not isinstance(turno, str):
-        turno = str(turno)
-    m = re.match(r"[A-Za-z]+", turno.strip())
-    return m.group(0).upper() if m else None
-
-def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
-    """True se il prefisso del turno è diverso da quello atteso per la residenza."""
-    if "Residenza" not in df.columns or "Turno" not in df.columns:
-        return pd.Series(False, index=df.index)
-    expected = df["Residenza"].apply(_res_to_prefix)
-    actual = df["Turno"].astype(str).apply(_turno_prefix)
-    return expected.notna() & actual.notna() & (expected != actual)
-
 
     except Exception as e:
         import traceback
