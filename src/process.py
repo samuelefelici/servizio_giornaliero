@@ -404,3 +404,54 @@ def transform_dataframe(df: pd.DataFrame, config_dir: Path) -> pd.DataFrame:
     return df_sorted
 
 __all__ = ["read_input_excel", "transform_dataframe"]
+
+def debug_probe(file) -> dict:
+    df_raw, origine = _read_excel_robusto(file)
+    df_raw = clean_spaces(df_raw)
+
+    # helper locali
+    def _is_empty_row(vals):
+        for v in vals:
+            if pd.isna(v): 
+                continue
+            if isinstance(v, str) and v.strip() == "":
+                continue
+            return False
+        return True
+
+    # trova sezioni con “struttura fissa”
+    def _first_non_empty_idx(start=0):
+        for i in range(start, len(df_raw)):
+            if not _is_empty_row(df_raw.iloc[i].tolist()):
+                return i
+        return None
+
+    idx_date = _first_non_empty_idx(0)
+    idx_header = _first_non_empty_idx((idx_date or -1) + 1) if idx_date is not None else None
+    idx_data = _first_non_empty_idx((idx_header or -1) + 1) if idx_header is not None else None
+
+    header_raw = df_raw.iloc[idx_header].tolist() if idx_header is not None else []
+    header_norm = [c.replace("\u00A0", " ").strip() if isinstance(c, str) else c for c in header_raw]
+    header_canon = _canonicalize_header(clean_column_names(header_raw)) if header_raw else []
+
+    # campione prime 6 righe × 8 colonne (testuale)
+    sample = []
+    max_r = min(6, len(df_raw))
+    max_c = min(8, df_raw.shape[1])
+    for r in range(max_r):
+        row = []
+        for c in range(max_c):
+            x = df_raw.iat[r, c]
+            if isinstance(x, str):
+                row.append(repr(x))  # evidenzia NBSP/BOM
+            else:
+                row.append(str(x))
+        sample.append(row)
+
+    return {
+        "origine": origine,
+        "shape": [int(df_raw.shape[0]), int(df_raw.shape[1])],
+        "idx_date": idx_date, "idx_header": idx_header, "idx_data": idx_data,
+        "header_raw": header_raw, "header_norm": header_norm, "header_canon": header_canon,
+        "sample_top_left": sample,
+    }
