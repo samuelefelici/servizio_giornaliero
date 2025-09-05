@@ -26,6 +26,13 @@ except Exception as e:
 
 # --- Config pagina ---
 st.set_page_config(page_title="Servizio Giornaliero", layout="wide")
+# forza il container principale a occupare tutta la viewport
+st.markdown("""
+<style>
+  .block-container { max-width: 100% !important; padding-left: 24px; padding-right: 24px; }
+</style>
+""", unsafe_allow_html=True)
+
 st.title("📋 Servizio Giornaliero – ExtraUrbano (Python)")
 st.caption("Drag & drop del file Excel (.xls/.xlsx), pulizia automatica, anteprima e export PDF/Excel (raggruppato per deposito).")
 
@@ -43,8 +50,7 @@ def _reorder_for_display(df: pd.DataFrame) -> pd.DataFrame:
 
 def _res_to_prefix(res: str) -> str | None:
     """Mappa la residenza a un prefisso atteso (JU o J sono famigliari)."""
-    if not isinstance(res, str):
-        return None
+    if not isinstance(res, str): return None
     r = res.upper().replace("_", " ")
     if "JESI URBANO" in r or r.strip() == "JU": return "JU"
     if "JESI" in r or r.strip() == "J":       return "J"
@@ -72,8 +78,7 @@ def _turno_bucket(turno: str) -> str | None:
     if not s or s.upper() == "ASSENTE" or s.upper() in REST_CODES:
         return None
     m = re.match(r"[A-Za-z]+", s)
-    if not m:
-        return None
+    if not m: return None
     up = m.group(0).upper()
     if up.startswith("JU"): return "JU"
     if up.startswith("J"):  return "J"
@@ -103,12 +108,11 @@ def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
     return df.apply(_is_trasferta, axis=1)
 
 # ---- Styled HTML per anteprima full-width con grassetto su trasferte ----
-
 def _style_bold_subset(df_disp: pd.DataFrame, mask: pd.Series, subset_cols: list[str]) -> str:
     """
-    Ritorna HTML di una tabella:
+    HTML di una tabella:
       - indice nascosto
-      - larghezza 100%
+      - larghezza vera 100vw (oltre i padding di Streamlit)
       - grassetto solo su colonne subset per le righe in trasferta (mask=True)
     """
     mask = mask.reindex(df_disp.index).fillna(False)
@@ -117,30 +121,31 @@ def _style_bold_subset(df_disp: pd.DataFrame, mask: pd.Series, subset_cols: list
         return ["font-weight: bold"] * len(row) if mask.loc[row.name] else [""] * len(row)
 
     sty = df_disp.style.apply(_bold_if_trasferta, axis=1, subset=subset_cols)
-    # nascondi indice (compatibilità con versioni pandas diverse)
-    try:
-        sty = sty.hide(axis="index")
-    except Exception:
-        try:
-            sty = sty.hide_index()
-        except Exception:
-            pass
+    # nascondi indice (compat con varie versioni pandas)
+    try:    sty = sty.hide(axis="index")
+    except: 
+        try: sty = sty.hide_index()
+        except: pass
 
     sty = sty.set_table_styles([
-        {"selector": "table",      "props": [("width", "100%"), ("border-collapse", "collapse")]},
-        {"selector": "th, td",     "props": [("border", "1px solid #e6e6e6"), ("padding", "6px 8px")]},
-        {"selector": "thead th",   "props": [("background-color", "#f7f7f7"), ("font-weight", "600")]},
+        {"selector": "table",    "props": [("width", "100%"), ("border-collapse", "collapse"), ("table-layout", "fixed")]},
+        {"selector": "th, td",   "props": [("border", "1px solid #e6e6e6"), ("padding", "6px 8px")]},
+        {"selector": "thead th", "props": [("background-color", "#f7f7f7"), ("font-weight", "600")]},
     ], overwrite=False)
 
-    return sty.to_html()
+    html = sty.to_html()
+    # wrapper che forza la tabella ad estendersi a tutta la viewport
+    wrapper = f"<div style='width:100vw;margin-left:calc(50% - 50vw);margin-right:calc(50% - 50vw);'>{html}</div>"
+    return wrapper
 
 def _show_styled_table(df_disp: pd.DataFrame, mask: pd.Series):
     subset_cols = [c for c in ["Turno", "Inizio", "Fine"] if c in df_disp.columns]
     if not subset_cols:
+        # fallback: Arrow dataframe comunque a piena larghezza del container
         st.dataframe(df_disp, use_container_width=True, hide_index=True)
         return
     html = _style_bold_subset(df_disp, mask, subset_cols)
-    st.markdown(f"<div style='width:100%; overflow-x:auto'>{html}</div>", unsafe_allow_html=True)
+    st.markdown(html, unsafe_allow_html=True)
 
 # ====================== UI ======================
 
@@ -210,19 +215,14 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
 
                 # Ordinamento interno
                 if inner_sort_choice.startswith("Inizio") and "Inizio" in g.columns:
-                    by = ["Inizio"]
-                    if "Cognome e Nome" in g.columns:
-                        by.append("Cognome e Nome")
+                    by = ["Inizio"] + (["Cognome e Nome"] if "Cognome e Nome" in g.columns else [])
                     g = g.sort_values(by=by).reset_index(drop=True)
                 else:
                     by = []
-                    if "Cognome e Nome" in g.columns:
-                        by.append("Cognome e Nome")
-                    if "Inizio" in g.columns:
-                        by.append("Inizio")
-                    if by:
-                        g = g.sort_values(by=by).reset_index(drop=True)
-                    # Compattazione: non ripetere Nome/Matricola su righe consecutive uguali
+                    if "Cognome e Nome" in g.columns: by.append("Cognome e Nome")
+                    if "Inizio" in g.columns:         by.append("Inizio")
+                    if by: g = g.sort_values(by=by).reset_index(drop=True)
+                    # Compattazione
                     if {"Cognome e Nome", "Matricola"}.issubset(g.columns):
                         same_person = g[["Cognome e Nome", "Matricola"]].eq(
                             g[["Cognome e Nome", "Matricola"]].shift(1)
@@ -230,19 +230,12 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
                         g.loc[same_person, ["Cognome e Nome", "Matricola"]] = ""
 
                 st.markdown(f"### **{res}**")
-
-                # Reorder/drop per visualizzazione
                 g_disp = _reorder_for_display(g)
-
-                # Bold per trasferte: calcolo sulla tabella originale 'g' (indici allineati)
-                mask = _trasferta_mask(g)
-
-                # ✅ anteprima wide + bold nelle celle Turno/Inizio/Fine per trasferte
+                mask   = _trasferta_mask(g)
                 _show_styled_table(g_disp, mask)
         else:
-            # Nessuna Residenza: mostra tabella piatta (bold trasferte se possibile)
             g_disp = _reorder_for_display(df_view)
-            mask = _trasferta_mask(df_view)
+            mask   = _trasferta_mask(df_view)
             _show_styled_table(g_disp, mask)
 
         # --- Export Excel (ordine colonne, filtro Assente applicato) ---
@@ -256,7 +249,7 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-        # --- Export PDF (stessa logica; bold trasferte gestito in pdf_export.py) ---
+        # --- Export PDF ---
         with tempfile.TemporaryDirectory() as td:
             pdf_path = Path(td) / "ServizioGiornaliero.pdf"
             inner_sort = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
