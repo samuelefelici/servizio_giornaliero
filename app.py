@@ -10,6 +10,8 @@ if str(ROOT) not in sys.path:
 import streamlit as st
 import pandas as pd
 
+REST_CODES = {"R", "RR"}
+
 # --- Import moduli del progetto (con gestione errore) ---
 try:
     from src.process import read_input_excel, transform_dataframe, debug_probe  # debug_probe opzionale
@@ -76,7 +78,7 @@ def _turno_bucket(turno: str) -> str | None:
     if not isinstance(turno, str):
         turno = str(turno)
     s = turno.strip()
-    if not s or s.upper() == "ASSENTE":
+    if not s or s.upper() == "ASSENTE" or s.upper() in REST_CODES:
         return None
     m = re.match(r"[A-Za-z]+", s)
     if not m:
@@ -95,20 +97,19 @@ def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
     return {prefix} if prefix else set()
 
 def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
-    """
-    True se la riga è 'trasferta' (Turno non appartiene ai prefissi accettati per la residenza).
-    Esclude Assente e righe senza info utile.
-    """
-    if not {"Residenza", "Turno"}.issubset(df.columns):
+    """True se il turno è 'fuori deposito', con J/JU equivalenti ed esclusi R/RR e Assente."""
+    if "Residenza" not in df.columns or "Turno" not in df.columns:
         return pd.Series(False, index=df.index)
 
     def _is_trasferta(row) -> bool:
+        turn = str(row["Turno"]).strip().upper()
+        if turn in REST_CODES or turn == "ASSENTE":
+            return False
         rp = _res_to_prefix(row["Residenza"])
         tb = _turno_bucket(row["Turno"])
         if rp is None or tb is None:
             return False
-        accepted = _accepted_prefixes_for_res(rp)
-        return tb not in accepted
+        return tb not in _accepted_prefixes_for_res(rp)
 
     return df.apply(_is_trasferta, axis=1)
 
@@ -213,7 +214,7 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
                         return (["font-weight: bold"] * len(row)) if mask.loc[row.name] else ([""] * len(row))
 
                     styled = g_disp.style.apply(_bold_if_trasferta, axis=1, subset=subset_cols)
-                    st.dataframe(styled, use_container_width=True, hide_index=True)
+                    st.write(styled)
                 else:
                     st.dataframe(g_disp, use_container_width=True, hide_index=True)
         else:
