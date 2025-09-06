@@ -14,6 +14,14 @@ import pandas as pd
 from pathlib import Path
 import re
 
+from datetime import datetime
+try:
+    from zoneinfo import ZoneInfo         # Python 3.9+
+    _TZ_ROMA = ZoneInfo("Europe/Rome")
+except Exception:
+    import pytz                           # fallback
+    _TZ_ROMA = pytz.timezone("Europe/Rome")
+
 from .constants import DISPLAY_ORDER
 
 REST_CODES = {"R", "RR"}
@@ -141,13 +149,15 @@ class _LastPageFooterCanvas(rl_canvas.Canvas):
             super().showPage()
         super().save()
 
-    def _draw_footer(self):
-        txt = self._exported_text
-        self.setFont("Helvetica", 8)
-        w = self.stringWidth(txt, "Helvetica", 8)
-        x = self._pagesize[0] - w - 10*mm
-        y = 8*mm
-        self.drawString(x, y, txt)
+    def _draw_footer(canvas, doc, footer_text: str):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 8)
+        # posizionamento in basso a destra
+        w = canvas.stringWidth(footer_text, "Helvetica", 8)
+        x = doc.pagesize[0] - doc.rightMargin - w
+        y = doc.bottomMargin * 0.6
+        canvas.drawString(x, y, footer_text)
+        canvas.restoreState()
 
 # -------- shaping tabella --------
 def _collapse_repeats(gdf: pd.DataFrame,
