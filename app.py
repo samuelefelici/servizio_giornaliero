@@ -325,7 +325,9 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
             inner_sort = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
             build_pdf(pdf_path, df_view, meta,
                       logo_path if logo_path.exists() else None,
-                      title=TITLE, inner_sort=inner_sort)
+                      title=TITLE, inner_sort=inner_sort,
+                      exported_at=datetime.now()
+                     )
             st.download_button(
                 "⬇️ Scarica PDF",
                 data=pdf_path.read_bytes(),
