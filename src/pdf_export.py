@@ -12,7 +12,21 @@ from reportlab.lib.enums import TA_CENTER
 
 from .constants import DISPLAY_ORDER
 
-REST_CODES = {"R", "RR"}  # riposo
+REST_CODES = {"R", "RR"}
+
+EXC_ANCONA_PREFIXES = (
+    "D1R1","D1R2","D1R5","D2R1","D2R3","D2R6",
+    "NP","ASC","V5",
+    "LU","MA","ME","GI","VE","SA","DO",
+)
+EXC_OTHER_PREFIXES = ("IAST","N")
+
+def _starts_with_any(raw_turno: str, prefixes: tuple[str, ...]) -> bool:
+    if raw_turno is None:
+        return False
+    s = str(raw_turno).upper().strip().replace(".", "").replace(" ", "")
+    return any(s.startswith(p) for p in prefixes)
+
 
 # ---------- helper prefissi deposito/turno ----------
 def _res_to_prefix(res: str) -> str | None:
@@ -47,21 +61,36 @@ def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
     return {prefix} if prefix else set()
 
 def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
-    """True se la riga è in 'trasferta' (J/JU equivalenti; esclude Assente e R/RR)."""
+    """
+    True se la riga è in 'trasferta' (turno non appartiene ai prefissi accettati).
+    Considera J e JU equivalenti; esclude Assente, R/RR e le eccezioni richieste.
+    """
     if "Residenza" not in df.columns or "Turno" not in df.columns:
         return pd.Series(False, index=df.index)
 
     def _is_trasferta(row) -> bool:
-        turn = str(row["Turno"]).strip().upper()
-        if turn in REST_CODES or turn == "ASSENTE":
+        turn_up = str(row["Turno"]).strip().upper()
+        if turn_up in REST_CODES or turn_up == "ASSENTE":
             return False
-        rp = _res_to_prefix(row["Residenza"])
-        tb = _turno_bucket(row["Turno"])
-        if rp is None or tb is None:
+
+        res_pref = _res_to_prefix(row["Residenza"])
+
+        # eccezioni
+        if res_pref == "A":  # ANCONA
+            if _starts_with_any(turn_up, EXC_ANCONA_PREFIXES):
+                return False
+        else:
+            if _starts_with_any(turn_up, EXC_OTHER_PREFIXES):
+                return False
+
+        # regola standard
+        bucket = _turno_bucket(turn_up)
+        if res_pref is None or bucket is None:
             return False
-        return tb not in _accepted_prefixes_for_res(rp)
+        return bucket not in _accepted_prefixes_for_res(res_pref)
 
     return df.apply(_is_trasferta, axis=1)
+
 
 # ---------- shaping tabella ----------
 def _collapse_repeats(gdf: pd.DataFrame,
