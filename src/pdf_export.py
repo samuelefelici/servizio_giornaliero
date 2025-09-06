@@ -9,7 +9,6 @@ from reportlab.lib.units import mm
 from reportlab.lib.enums import TA_CENTER
 from reportlab.pdfgen import canvas as rl_canvas
 from xml.sax.saxutils import escape
-from io import BytesIO
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
@@ -81,14 +80,20 @@ def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
     return {prefix} if prefix else set()
 
 def _should_highlight_turno(residenza, turno) -> bool:
+    """
+    Decide se evidenziare (grassetto) Turno/Inizio/Fine per la riga.
+    """
     t = _norm_turno(turno)
     if not t or t in {"ASSENTE", *REST_CODES}:
         return False
+
+    # Eccezioni globali (match esatto)
     if _match_any(t, GLOBAL_EXC_PATTERNS):
         return False
 
     rp = _res_to_prefix(residenza)
 
+    # Eccezioni per deposito
     if rp == "A":  # ANCONA
         if _starts_with_any(t, EXC_ANCONA_PREFIXES):
             return False
@@ -136,7 +141,7 @@ def _header_table(title_para: Paragraph, logo_path: Path | None, page_w: float) 
 # ======================= Shaping tabella =======================
 def _collapse_repeats(gdf: pd.DataFrame,
                       key_cols=("Cognome e Nome", "Matricola"),
-                      collapse_cols=("Cognome e Nome", "Matricola")) -> pd.DataFrame:
+                      collapse_cols=("Cognome e Nome", "Matricola")) -> pdDataFrame:
     missing = [c for c in key_cols if c not in gdf.columns]
     if missing:
         return gdf
@@ -176,7 +181,7 @@ def _calc_col_widths(page_width: float) -> list[float]:
     w_note = max(30 * mm, page_width - used)
     return [w_matricola, w_nome, w_turno, w_inizio, w_fine, w_note]
 
-# ======================= Story builder (riusabile per 2 pass) =======================
+# ======================= Story builder =======================
 def _make_story(df: pd.DataFrame, meta: dict, logo_path: Path | None,
                 page_w: float, styles, inner_sort: str) -> list:
     title_style = ParagraphStyle(
@@ -271,23 +276,46 @@ def _make_story(df: pd.DataFrame, meta: dict, logo_path: Path | None,
 
     return elems
 
-# ======================= Build PDF (2 pass, niente pagina extra) =======================
-class _CountPagesCanvas(rl_canvas.Canvas):
-    """Canvas minimale per contare il numero totale di pagine (prima passata)."""
-    def __init__(self, *args, counter=None, **kwargs):
+# ======================= Canvas (ultima pagina, nessun foglio extra) =======================
+class _FooterCanvas(rl_canvas.Canvas):
+    """
+    Canvas che disegna il footer SOLO sull'ultima pagina, senza introdurre pagine extra.
+    Nota: usiamo _startPage() in showPage() (NON super().showPage()) come da ricetta ReportLab.
+    """
+    def __init__(self, *args, footer_text: str = "", right_margin: float = 10*mm,
+                 bottom_margin: float = 12*mm, **kwargs):
         super().__init__(*args, **kwargs)
-        self._counter = counter
-        self._count = 0
-    def showPage(self):
-        self._count += 1
-        super().showPage()
-    def save(self):
-        # l'ultima pagina non chiama showPage
-        self._count += 1
-        if self._counter is not None:
-            self._counter[0] = self._count
-        super().save()
+        self._saved_page_states = []
+        self._footer_text = footer_text
+        self._right_margin = right_margin
+        self._bottom_margin = bottom_margin
 
+    def showPage(self):
+        # salva lo stato della pagina corrente e avvia la successiva SENZA scriverla subito
+        self._saved_page_states.append(dict(self.__dict__))
+        self._startPage()  # <- fondamentale per NON creare una pagina extra
+
+    def save(self):
+        # aggiungi anche l'ultima pagina
+        self._saved_page_states.append(dict(self.__dict__))
+
+        for i, state in enumerate(self._saved_page_states):
+            self.__dict__.update(state)
+            is_last = (i == len(self._saved_page_states) - 1)
+
+            if is_last and self._footer_text:
+                self.saveState()
+                self.setFont("Helvetica", 8)
+                w = self.stringWidth(self._footer_text, "Helvetica", 8)
+                x = self._pagesize[0] - self._right_margin - w
+                y = self._bottom_margin * 0.6
+                self.drawString(x, y, self._footer_text)
+                self.restoreState()
+
+            rl_canvas.Canvas.showPage(self)  # scrivi la pagina
+        rl_canvas.Canvas.save(self)
+
+# ======================= Build PDF =======================
 def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
               logo_path: Path | None = None, title: str = "Servizio Giornaliero",
               inner_sort: str = "nome", exported_at: datetime | None = None):
@@ -297,36 +325,24 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
     top   = 12 * mm
     bottom= 12 * mm
 
+    doc = SimpleDocTemplate(str(path_out), pagesize=A4,
+                            rightMargin=right, leftMargin=left,
+                            topMargin=top, bottomMargin=bottom)
     styles = getSampleStyleSheet()
     page_w = A4[0] - left - right
 
-    # -------- Pass 1: conta pagine --------
-    tmp_buf = BytesIO()
-    doc_tmp = SimpleDocTemplate(tmp_buf, pagesize=A4,
-                                rightMargin=right, leftMargin=left,
-                                topMargin=top, bottomMargin=bottom)
-    story1 = _make_story(df, meta, logo_path, page_w, styles, inner_sort)
-    page_counter = [0]
-    doc_tmp.build(story1, canvasmaker=lambda *a, **k: _CountPagesCanvas(*a, counter=page_counter, **k))
-    total_pages = page_counter[0]
+    story = _make_story(df, meta, logo_path, page_w, styles, inner_sort)
 
-    # -------- Pass 2: PDF finale con footer SOLO nell'ultima pagina --------
+    # Footer (ultima pagina) — orario Europe/Rome
     if exported_at is None:
         exported_at = datetime.now(_TZ_ROMA)
     footer_text = exported_at.strftime("servizio esportato il %d/%m/%Y alle %H:%M")
 
-    def _draw_footer(canv, doc):
-        if canv.getPageNumber() == total_pages:
-            canv.saveState()
-            canv.setFont("Helvetica", 8)
-            w = canv.stringWidth(footer_text, "Helvetica", 8)
-            x = doc.pagesize[0] - right - w
-            y = bottom * 0.6
-            canv.drawString(x, y, footer_text)
-            canv.restoreState()
+    def _canvas_factory(*args, **kwargs):
+        return _FooterCanvas(*args,
+                             footer_text=footer_text,
+                             right_margin=right,
+                             bottom_margin=bottom,
+                             **kwargs)
 
-    doc = SimpleDocTemplate(str(path_out), pagesize=A4,
-                            rightMargin=right, leftMargin=left,
-                            topMargin=top, bottomMargin=bottom)
-    story2 = _make_story(df, meta, logo_path, page_w, styles, inner_sort)
-    doc.build(story2, onFirstPage=_draw_footer, onLaterPages=_draw_footer)
+    doc.build(story, canvasmaker=_canvas_factory)
