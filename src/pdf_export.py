@@ -14,10 +14,10 @@ from .constants import DISPLAY_ORDER
 
 REST_CODES = {"R", "RR"}
 
-# Eccezioni GLOBALI: valgono per tutti i depositi
+# Eccezioni GLOBALI (match ESATTO, valide ovunque)
 GLOBAL_EXC_PATTERNS = (
-    r"^IAST$",   # esattamente IAST
-    r"^N$",      # esattamente N
+    r"^IAST$",
+    r"^N$",
 )
 
 EXC_ANCONA_PREFIXES = (
@@ -25,10 +25,12 @@ EXC_ANCONA_PREFIXES = (
     "NP","ASC","V5",
     "LU","MA","ME","GI","VE","SA","DO",
 )
-EXC_OTHER_PREFIXES = ("IAST","N")
+EXC_ANCONA_PATTERNS  = tuple(rf"^{re.escape(p)}" for p in EXC_ANCONA_PREFIXES)
 
+# Niente eccezioni «altri depositi» oltre alle GLOBAL (evitiamo di bloccare NP)
+EXC_OTHER_PATTERNS = tuple()
 
-# ---------- helper prefissi deposito/turno (allineati ad app.py) ----------
+# ---------- helper prefissi deposito/turno ----------
 def _res_to_prefix(res: str) -> str | None:
     if not isinstance(res, str):
         return None
@@ -46,15 +48,13 @@ def _res_to_prefix(res: str) -> str | None:
     return None
 
 def _norm_turno(s) -> str:
-    """Maiuscolo, senza punti/spazi: es. ' v5. ' -> 'V5'."""
     return str(s or "").upper().strip().replace(".", "").replace(" ", "")
 
-def _starts_with_any(raw_turno: str, prefixes: tuple[str, ...]) -> bool:
-    t = _norm_turno(raw_turno)
-    return any(t.startswith(p) for p in prefixes)
+def _match_any(token: str, patterns: tuple[str, ...]) -> bool:
+    t = _norm_turno(token)
+    return any(re.match(p, t) for p in patterns)
 
 def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
-    """J e JU sono equivalenti; gli altri prefissi sono singoli."""
     if prefix in {"J", "JU"}:
         return {"J", "JU"}
     return {prefix} if prefix else set()
@@ -64,45 +64,38 @@ def _should_highlight_turno(residenza, turno) -> bool:
     if not t or t in {"ASSENTE", *REST_CODES}:
         return False
 
-    # >>> NUOVO: eccezioni GLOBALI (valgono sempre)
+    # Globali
     if _match_any(t, GLOBAL_EXC_PATTERNS):
         return False
 
     rp = _res_to_prefix(residenza)
 
-    # Eccezioni specifiche per deposito
-    if rp == "A":  # ANCONA
+    # Specifiche
+    if rp == "A":  # Ancona
         if _match_any(t, EXC_ANCONA_PATTERNS):
             return False
     else:
-        if _match_any(t, EXC_OTHER_PATTERNS):
-            return False
+        # niente: globali già coprono IAST/N
+        pass
 
     # Regola standard J/JU equivalenti, altrimenti prima lettera
-    if t.startswith("JU"):
-        b = "JU"
-    elif t.startswith("J"):
-        b = "J"
-    else:
-        b = t[0] if t else None
+    if t.startswith("JU"): b = "JU"
+    elif t.startswith("J"): b = "J"
+    else:                   b = t[0] if t else None
 
     if not rp or not b:
         return False
     return b not in _accepted_prefixes_for_res(rp)
 
-
 def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
-    """Serie booleana con True sulle righe da evidenziare (trasferte fuori regola + no eccezioni)."""
     if "Residenza" not in df.columns or "Turno" not in df.columns:
         return pd.Series(False, index=df.index)
     return df.apply(lambda r: _should_highlight_turno(r.get("Residenza"), r.get("Turno")), axis=1)
-
 
 # ---------- shaping tabella ----------
 def _collapse_repeats(gdf: pd.DataFrame,
                       key_cols=("Cognome e Nome", "Matricola"),
                       collapse_cols=("Cognome e Nome", "Matricola")) -> pd.DataFrame:
-    """Sui record consecutivi della stessa persona azzera i campi ripetitivi."""
     missing = [c for c in key_cols if c not in gdf.columns]
     if missing:
         return gdf
@@ -114,10 +107,6 @@ def _collapse_repeats(gdf: pd.DataFrame,
     return g
 
 def _table_data_for(df: pd.DataFrame, para_style: ParagraphStyle):
-    """
-    Applica DISPLAY_ORDER, rimuove 'Residenza' e converte la colonna Note in Paragraph
-    per il word-wrapping. Sostituisce '*' con <br/> (a capo forzato).
-    """
     cols = [c for c in DISPLAY_ORDER if c in df.columns]
     dfp = df.copy()
     if cols:
@@ -127,42 +116,29 @@ def _table_data_for(df: pd.DataFrame, para_style: ParagraphStyle):
     header = list(dfp.columns)
     rows = dfp.fillna("").values.tolist()
 
-    # trasforma "Indennità e note" in Paragraph per andare a capo
     if "Indennità e note" in header:
         idx_note = header.index("Indennità e note")
         for r in rows:
             txt = str(r[idx_note])
-            txt = escape(txt).replace("*", "<br/>")  # prima escape, poi <br/> per '*'
+            txt = escape(txt).replace("*", "<br/>")
             r[idx_note] = Paragraph(txt, para_style)
 
     return [header] + rows
 
 def _calc_col_widths(page_width_mm: float) -> list:
-    """
-    Calcola larghezze colonne in mm usando tutto lo spazio disponibile.
-    Ordine: Matricola, Cognome e Nome, Turno, Inizio, Fine, Indennità e note
-    """
     w_matricola = 24 * mm
     w_nome      = 60 * mm
     w_turno     = 22 * mm
     w_inizio    = 18 * mm
     w_fine      = 18 * mm
     used = w_matricola + w_nome + w_turno + w_inizio + w_fine
-    w_note = max(30 * mm, page_width_mm - used)  # il resto alla colonna Note (min 30mm)
+    w_note = max(30 * mm, page_width_mm - used)
     return [w_matricola, w_nome, w_turno, w_inizio, w_fine, w_note]
-
 
 # ---------- build PDF ----------
 def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
               logo_path: Path | None = None, title: str = "Servizio Giornaliero",
               inner_sort: str = "nome"):
-    """
-    Crea un PDF raggruppato per Residenza.
-    - Usa tutta la larghezza della pagina, la colonna Note prende lo spazio residuo
-    - Word-wrap nelle Note (con * = a capo forzato)
-    - Grassetto Turno/Inizio/Fine per le trasferte (J/JU equivalenti; R/RR/Assente ed eccezioni NON in grassetto)
-    """
-    # Margini e doc
     right=10*mm; left=10*mm; top=12*mm; bottom=12*mm
     doc = SimpleDocTemplate(str(path_out), pagesize=A4,
                             rightMargin=right, leftMargin=left,
@@ -185,21 +161,17 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
                                  fontSize=14, leading=16, spaceBefore=6, spaceAfter=2,
                                  alignment=TA_CENTER)
     note_style  = ParagraphStyle("NoteBody", parent=styles["BodyText"],
-                                 leading=12, wordWrap="CJK")  # wrap aggressivo se parole lunghe
+                                 leading=12, wordWrap="CJK")
 
     elems = []
-
-    # Intestazione
     header_text = f"Servizio Giornaliero: {meta.get('giorno','')} {meta.get('data','')}"
     elems.append(Paragraph(header_text, title_style))
 
     if logo_path and logo_path.exists():
         elems.append(Spacer(1, 2*mm))
-        img = Image(str(logo_path))
-        img._restrictSize(40*mm, 15*mm)
+        img = Image(str(logo_path)); img._restrictSize(40*mm, 15*mm)
         elems.append(img)
 
-    # Grouping per Residenza
     if "Residenza" not in df.columns:
         blocks = [("TUTTI", df)]
     else:
@@ -208,7 +180,6 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
 
     first_block = True
     for res_name, gdf in blocks:
-        # Ordinamento interno
         if inner_sort == "inizio" and "Inizio" in gdf.columns:
             by = ["Inizio"] + (["Cognome e Nome"] if "Cognome e Nome" in gdf.columns else [])
             gdf = gdf.sort_values(by=by).reset_index(drop=True)
@@ -218,10 +189,8 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
             if "Inizio" in gdf.columns:         by.append("Inizio")
             if by:
                 gdf = gdf.sort_values(by=by).reset_index(drop=True)
-            gdf = _collapse_repeats(
-                gdf, key_cols=("Cognome e Nome", "Matricola"),
-                collapse_cols=("Cognome e Nome", "Matricola")
-            )
+            gdf = _collapse_repeats(gdf, key_cols=("Cognome e Nome","Matricola"),
+                                    collapse_cols=("Cognome e Nome","Matricola"))
 
         trasferte = _trasferta_mask(gdf)
 
@@ -229,19 +198,15 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
             elems.append(Spacer(1, 3*mm))
         first_block = False
 
-        # Titolo gruppo
         elems.append(Paragraph(res_name, group_style))
 
-        # Dati tabella
         data   = _table_data_for(gdf, note_style)
         header = data[0]
         col_idx = {name: header.index(name) for name in ["Turno","Inizio","Fine"] if name in header}
         idx_inizio = col_idx.get("Inizio")
         idx_fine   = col_idx.get("Fine")
 
-        # Larghezze colonne per sfruttare tutta la pagina
         col_widths = _calc_col_widths(page_w)
-
         tbl = Table(data, repeatRows=1, colWidths=col_widths)
 
         base_style = [
@@ -255,8 +220,7 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
         if idx_fine is not None:
             base_style.append(("ALIGN", (idx_fine,1), (idx_fine,-1), "CENTER"))
 
-        # Grassetto per trasferte (solo Turno/Inizio/Fine)
-        for i, is_tr in enumerate(trasferte.tolist(), start=1):  # +1: salta l'header
+        for i, is_tr in enumerate(trasferte.tolist(), start=1):
             if not is_tr:
                 continue
             for cidx in col_idx.values():
