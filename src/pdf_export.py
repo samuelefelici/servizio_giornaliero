@@ -7,7 +7,6 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.lib.units import mm
 from reportlab.lib.enums import TA_CENTER
-from reportlab.pdfgen import canvas as rl_canvas
 from xml.sax.saxutils import escape
 from datetime import datetime
 from pathlib import Path
@@ -120,17 +119,41 @@ def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
     return df.apply(lambda r: _should_highlight_turno(r.get("Residenza"), r.get("Turno")), axis=1)
 
 # ======================= Header helper =======================
-def _header_table(title_para: Paragraph, logo_path: Path | None, page_w: float) -> Table:
+def _header_table(title_para: Paragraph,
+                  logo_path: Path | None,
+                  page_w: float,
+                  small_note_para: Paragraph) -> Table:
+    """
+    Riga con titolo (sx) e colonna destra con:
+    [logo]
+    [nota in piccolo allineata a destra]
+    """
+    # build right column: image + small note
     if logo_path and logo_path.exists():
         img = Image(str(logo_path))
         img._restrictSize(MAX_LOGO_W, MAX_LOGO_H)
     else:
         img = Spacer(MAX_LOGO_W, MAX_LOGO_H)
 
-    tbl = Table([[title_para, img]], colWidths=[page_w - MAX_LOGO_W, MAX_LOGO_W])
+    right_col = Table(
+        [[img],
+         [small_note_para]],
+        colWidths=[MAX_LOGO_W]
+    )
+    right_col.setStyle(TableStyle([
+        ("ALIGN", (0, 0), (0, 0), "RIGHT"),   # logo a destra
+        ("ALIGN", (0, 1), (0, 1), "RIGHT"),   # nota a destra
+        ("LEFTPADDING",  (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING",   (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING",(0, 0), (-1, -1), 0),
+    ]))
+
+    # main header row: title (left) + right_col (right)
+    tbl = Table([[title_para, right_col]],
+                colWidths=[page_w - MAX_LOGO_W, MAX_LOGO_W])
     tbl.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("ALIGN",  (1, 0), (1, 0),  "RIGHT"),
         ("LEFTPADDING",  (0, 0), (-1, -1), 0),
         ("RIGHTPADDING", (0, 0), (-1, -1), 0),
         ("TOPPADDING",   (0, 0), (-1, -1), 0),
@@ -190,9 +213,27 @@ def _calc_col_widths(page_width: float) -> list[float]:
     w_note = max(30 * mm, page_width - used)  # il resto alla colonna Note (min 30mm)
     return [w_matricola, w_nome, w_turno, w_inizio, w_fine, w_note]
 
-# ======================= Story builder =======================
-def _make_story(df: pd.DataFrame, meta: dict, logo_path: Path | None,
-                page_w: float, styles, inner_sort: str) -> list:
+# ======================= Build PDF =======================
+def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
+              logo_path: Path | None = None, title: str = "Servizio Giornaliero",
+              inner_sort: str = "nome", exported_at: datetime | None = None):
+    """
+    - Titolo a sinistra + logo a destra con nota in piccolo sotto il logo
+    - Larghezza piena, Note che assorbe lo spazio residuo, wrapping con '*' -> newline.
+    - Grassetto su Turno/Inizio/Fine per righe in trasferta (con eccezioni).
+    """
+    # Margini/doc
+    right = 10 * mm
+    left  = 10 * mm
+    top   = 12 * mm
+    bottom= 12 * mm
+
+    doc = SimpleDocTemplate(str(path_out), pagesize=A4,
+                            rightMargin=right, leftMargin=left,
+                            topMargin=top, bottomMargin=bottom)
+    page_w = A4[0] - left - right  # larghezza utile
+
+    styles = getSampleStyleSheet()
     title_style = ParagraphStyle(
         "TitleTight",
         parent=styles["Title"],
@@ -212,14 +253,35 @@ def _make_story(df: pd.DataFrame, meta: dict, logo_path: Path | None,
         spaceAfter=2,
         alignment=TA_CENTER,
     )
-    note_style = ParagraphStyle("NoteBody", parent=styles["BodyText"], leading=12, wordWrap="CJK")
+    note_style = ParagraphStyle(
+        "NoteBody",
+        parent=styles["BodyText"],
+        leading=12,
+        wordWrap="CJK",  # wrapping aggressivo per parole lunghe
+    )
+    small_note_style = ParagraphStyle(
+        "SmallExportNote",
+        parent=styles["Normal"],
+        fontSize=8,
+        textColor=colors.grey,
+        spaceBefore=1,
+        spaceAfter=0,
+    )
 
     elems: list = []
-    header_text = f"Servizio Giornaliero: {meta.get('giorno','')} {meta.get('data','')}"
-    title_para = Paragraph(header_text, title_style)
-    elems.append(_header_table(title_para, logo_path, page_w))
 
-    # Grouping per Residenza
+    # Testo "esportato il ... alle ..." (Europe/Rome)
+    if exported_at is None:
+        exported_at = datetime.now(_TZ_ROMA)
+    export_text = exported_at.strftime("servizio esportato il %d/%m/%Y alle %H:%M")
+
+    # Header: titolo + (logo sopra, export_text sotto)
+    header_text = f"Servizio Giornaliero: {meta.get('giorno','')} {meta.get('data','')}"
+    title_para  = Paragraph(header_text, title_style)
+    small_para  = Paragraph(export_text, small_note_style)
+    elems.append(_header_table(title_para, logo_path, page_w, small_para))
+
+    # Raggruppamento per Residenza
     if "Residenza" not in df.columns:
         blocks = [("TUTTI", df)]
     else:
@@ -228,6 +290,7 @@ def _make_story(df: pd.DataFrame, meta: dict, logo_path: Path | None,
 
     first_block = True
     for res_name, gdf in blocks:
+        # Ordinamento interno
         if inner_sort == "inizio" and "Inizio" in gdf.columns:
             by = ["Inizio"] + (["Cognome e Nome"] if "Cognome e Nome" in gdf.columns else [])
             gdf = gdf.sort_values(by=by).reset_index(drop=True)
@@ -251,14 +314,17 @@ def _make_story(df: pd.DataFrame, meta: dict, logo_path: Path | None,
             elems.append(Spacer(1, 3 * mm))
         first_block = False
 
+        # Titolo gruppo (centrato)
         elems.append(Paragraph(res_name, group_style))
 
+        # Tabella dati
         data = _table_data_for(gdf, note_style)
         header = data[0]
 
+        # Indici colonne interessate (dinamici)
         col_idx = {name: header.index(name) for name in ["Turno", "Inizio", "Fine"] if name in header}
         idx_inizio = col_idx.get("Inizio")
-        idx_fine   = col_idx.get("Fine")
+        idx_fine = col_idx.get("Fine")
 
         col_widths = _calc_col_widths(page_w)
         tbl = Table(data, repeatRows=1, colWidths=col_widths)
@@ -269,12 +335,14 @@ def _make_story(df: pd.DataFrame, meta: dict, logo_path: Path | None,
             ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
             ("VALIGN",     (0, 0), (-1, -1), "TOP"),
         ]
+        # Allineamento centro per Inizio/Fine
         if idx_inizio is not None:
             base_style.append(("ALIGN", (idx_inizio, 1), (idx_inizio, -1), "CENTER"))
         if idx_fine is not None:
             base_style.append(("ALIGN", (idx_fine, 1), (idx_fine, -1), "CENTER"))
 
-        for i, is_tr in enumerate(trasferte.tolist(), start=1):
+        # Grassetto per trasferte (solo Turno/Inizio/Fine)
+        for i, is_tr in enumerate(trasferte.tolist(), start=1):  # +1 per saltare header
             if not is_tr:
                 continue
             for cidx in col_idx.values():
@@ -283,74 +351,5 @@ def _make_story(df: pd.DataFrame, meta: dict, logo_path: Path | None,
         tbl.setStyle(TableStyle(base_style))
         elems.append(tbl)
 
-    return elems
-
-# ======================= Canvas (ultima pagina, nessun foglio extra) =======================
-class _FooterCanvas(rl_canvas.Canvas):
-    """
-    Canvas che disegna il footer SOLO sull'ultima pagina, senza introdurre pagine extra.
-    """
-    def __init__(self, *args, footer_text: str = "", right_margin: float = 10*mm,
-                 bottom_margin: float = 12*mm, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._saved_page_states = []
-        self._footer_text = footer_text
-        self._right_margin = right_margin
-        self._bottom_margin = bottom_margin
-
-    def showPage(self):
-        # salva lo stato della pagina corrente e avvia la successiva SENZA scriverla subito
-        self._saved_page_states.append(dict(self.__dict__))
-        self._startPage()  # ← evita la pagina extra
-
-    def save(self):
-        # aggiungi anche l'ultima pagina
-        self._saved_page_states.append(dict(self.__dict__))
-
-        for i, state in enumerate(self._saved_page_states):
-            self.__dict__.update(state)
-            is_last = (i == len(self._saved_page_states) - 1)
-
-            if is_last and self._footer_text:
-                self.saveState()
-                self.setFont("Helvetica", 8)
-                w = self.stringWidth(self._footer_text, "Helvetica", 8)
-                x = self._pagesize[0] - self._right_margin - w
-                y = self._bottom_margin * 0.6
-                self.drawString(x, y, self._footer_text)
-                self.restoreState()
-
-            rl_canvas.Canvas.showPage(self)
-        rl_canvas.Canvas.save(self)
-
-# ======================= Build PDF =======================
-def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
-              logo_path: Path | None = None, title: str = "Servizio Giornaliero",
-              inner_sort: str = "nome", exported_at: datetime | None = None):
-
-    right = 10 * mm
-    left  = 10 * mm
-    top   = 12 * mm
-    bottom= 12 * mm
-
-    doc = SimpleDocTemplate(str(path_out), pagesize=A4,
-                            rightMargin=right, leftMargin=left,
-                            topMargin=top, bottomMargin=bottom)
-    styles = getSampleStyleSheet()
-    page_w = A4[0] - left - right
-
-    story = _make_story(df, meta, logo_path, page_w, styles, inner_sort)
-
-    # Footer (ultima pagina) — orario Europe/Rome
-    if exported_at is None:
-        exported_at = datetime.now(_TZ_ROMA)
-    footer_text = exported_at.strftime("servizio esportato il %d/%m/%Y alle %H:%M")
-
-    def _canvas_factory(*args, **kwargs):
-        return _FooterCanvas(*args,
-                             footer_text=footer_text,
-                             right_margin=right,
-                             bottom_margin=bottom,
-                             **kwargs)
-
-    doc.build(story, canvasmaker=_canvas_factory)
+    # Build (niente canvas personalizzati, nessun foglio extra)
+    doc.build(elems)
