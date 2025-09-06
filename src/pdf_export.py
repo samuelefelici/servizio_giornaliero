@@ -15,7 +15,7 @@ from .constants import DISPLAY_ORDER
 REST_CODES = {"R", "RR"}
 
 EXC_ANCONA_PREFIXES = (
-    "D1R1","D1R2","D1R5","D2R1", "D2R2,"D2R3","D2R6",
+    "D1R1","D1R2","D1R5","D2R1","D2R2","D2R3","D2R6",
     "NP","ASC","V5",
     "LU","MA","ME","GI","VE","SA","DO",
 )
