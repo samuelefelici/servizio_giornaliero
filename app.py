@@ -69,7 +69,7 @@ st.title("📋 Servizio Giornaliero – ExtraUrbano (Python)")
 st.caption("Drag & drop del file Excel (.xls/.xlsx), pulizia automatica, anteprima e export PDF/Excel (raggruppato per deposito).")
 
 cfg_dir   = Path("config")
-assets_dir= Path("assets")
+assets_dir= Path("assest")
 logo_path = assets_dir / "logo.jpg"
 
 # ====================== Helper ======================
