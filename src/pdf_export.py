@@ -128,36 +128,45 @@ def _header_table(title_para: Paragraph, logo_path: Path | None, page_w: float) 
     ]))
     return tbl
 
+# --- sostituisci tutta la classe con questa ---
 class _LastPageFooterCanvas(rl_canvas.Canvas):
     """Disegna un testo in piccolo in basso a destra SOLO sull'ultima pagina."""
-    def __init__(self, *args, exported_text: str = "", **kwargs):
+    def __init__(self, *args, exported_text: str = "",
+                 right_margin: float = 10*mm, bottom_margin: float = 12*mm,
+                 **kwargs):
         super().__init__(*args, **kwargs)
         self._saved_page_states = []
         self._exported_text = exported_text
+        self._right_margin = right_margin
+        self._bottom_margin = bottom_margin
 
     def showPage(self):
+        # salva lo stato della pagina corrente poi passa alla successiva
         self._saved_page_states.append(dict(self.__dict__))
-        self._startPage()
+        super().showPage()
 
     def save(self):
-        # salva anche lo stato della pagina corrente
+        # salva anche l'ultima pagina
         self._saved_page_states.append(dict(self.__dict__))
         for i, state in enumerate(self._saved_page_states):
             self.__dict__.update(state)
+            # disegna il footer solo sull'ULTIMA pagina
             if i == len(self._saved_page_states) - 1:
                 self._draw_footer()
             super().showPage()
         super().save()
 
-    def _draw_footer(canvas, doc, footer_text: str):
-        canvas.saveState()
-        canvas.setFont("Helvetica", 8)
-        # posizionamento in basso a destra
-        w = canvas.stringWidth(footer_text, "Helvetica", 8)
-        x = doc.pagesize[0] - doc.rightMargin - w
-        y = doc.bottomMargin * 0.6
-        canvas.drawString(x, y, footer_text)
-        canvas.restoreState()
+    def _draw_footer(self):
+        """Usa i margini e la pagesize memorizzati nell'istanza."""
+        self.saveState()
+        self.setFont("Helvetica", 8)
+        footer_text = self._exported_text
+        w = self.stringWidth(footer_text, "Helvetica", 8)
+        x = self._pagesize[0] - self._right_margin - w
+        y = self._bottom_margin * 0.6
+        self.drawString(x, y, footer_text)
+        self.restoreState()
+
 
 # -------- shaping tabella --------
 def _collapse_repeats(gdf: pd.DataFrame,
