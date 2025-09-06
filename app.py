@@ -12,7 +12,8 @@ import streamlit as st
 import pandas as pd
 
 REST_CODES = {"R", "RR"}   # riposo
-# Eccezioni GLOBALI: valgono per tutti i depositi
+
+# Eccezioni GLOBALI: valgono per tutti i depositi (match ESATTO)
 GLOBAL_EXC_PATTERNS = (
     r"^IAST$",   # esattamente IAST
     r"^N$",      # esattamente N
@@ -24,7 +25,11 @@ EXC_ANCONA_PREFIXES = (
     "NP","ASC","V5",
     "LU","MA","ME","GI","VE","SA","DO",
 )
-EXC_OTHER_PREFIXES = ("IAST","N")
+# prefissi -> regex "inizia con"
+EXC_ANCONA_PATTERNS  = tuple(rf"^{re.escape(p)}" for p in EXC_ANCONA_PREFIXES)
+
+# NON usare 'N' come prefisso per gli altri depositi (sennò cattura anche NP).
+EXC_OTHER_PATTERNS = tuple()  # lasciato vuoto: IAST/N sono già coperti da GLOBAL_EXC_PATTERNS
 # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
 # --- Import moduli del progetto (con gestione errore) ---
@@ -95,10 +100,10 @@ def _norm_turno(s) -> str:
     """Normalizza il codice turno per match robusti (maiuscolo, senza punti/spazi)."""
     return str(s or "").upper().strip().replace(".", "").replace(" ", "")
 
-def _starts_with_any(raw_turno: str, prefixes: tuple[str, ...]) -> bool:
-    """True se il turno normalizzato inizia con uno dei prefissi dati."""
-    t = _norm_turno(raw_turno)
-    return any(t.startswith(p) for p in prefixes)
+def _match_any(token: str, patterns: tuple[str, ...]) -> bool:
+    """True se 'token' normalizzato soddisfa uno dei pattern regex."""
+    t = _norm_turno(token)
+    return any(re.match(p, t) for p in patterns)
 
 def _turno_bucket(turno: str) -> str | None:
     """
@@ -123,7 +128,7 @@ def _should_highlight_turno(residenza, turno) -> bool:
     if not t or t in {"ASSENTE", *REST_CODES}:
         return False
 
-    # >>> NUOVO: eccezioni GLOBALI (valgono sempre)
+    # Eccezioni GLOBALI (match esatto)
     if _match_any(t, GLOBAL_EXC_PATTERNS):
         return False
 
@@ -134,8 +139,8 @@ def _should_highlight_turno(residenza, turno) -> bool:
         if _match_any(t, EXC_ANCONA_PATTERNS):
             return False
     else:
-        if _match_any(t, EXC_OTHER_PATTERNS):
-            return False
+        # niente: IAST/N già catturati come GLOBAL (evitiamo di escludere NP ecc.)
+        pass
 
     # Regola standard J/JU equivalenti, altrimenti prima lettera
     if t.startswith("JU"):
@@ -148,7 +153,6 @@ def _should_highlight_turno(residenza, turno) -> bool:
     if not rp or not b:
         return False
     return b not in _accepted_prefixes_for_res(rp)
-
 
 def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
     """
@@ -165,7 +169,6 @@ def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series) -> str:
     Bold su Turno/Inizio/Fine quando trasferta_mask è True.
     Nelle Note l'asterisco * forza un a capo.
     """
-    # copia e prepara la colonna Note con <br/> al posto di *
     df_html = g_disp.copy()
     note_col = "Indennità e note"
     if note_col in df_html.columns:
@@ -193,7 +196,6 @@ def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series) -> str:
                 "props": [("width","40%"), ("white-space","normal"), ("word-break","break-word")]}
            ], overwrite=False)
           )
-    # escape=False per far rendere i <br/>
     return f'<div class="serv-table-wrap">{sty.to_html(escape=False)}</div>'
 
 
@@ -305,7 +307,7 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
             html   = _styled_html_table(g_disp, mask)
             st.markdown(html, unsafe_allow_html=True)
 
-        # --- Export Excel (ordine colonne, filtro Assente applicato) ---
+        # --- Export Excel ---
         xls_buf = io.BytesIO()
         with pd.ExcelWriter(xls_buf, engine="openpyxl") as writer:
             _reorder_for_display(df_view).to_excel(writer, sheet_name="ServizioGiornaliero", index=False)
