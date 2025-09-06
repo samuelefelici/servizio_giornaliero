@@ -4,11 +4,11 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.lib.units import mm
+from reportlab.lib.enums import TA_CENTER
 from xml.sax.saxutils import escape
 import pandas as pd
 from pathlib import Path
 import re
-from reportlab.lib.enums import TA_CENTER
 
 from .constants import DISPLAY_ORDER
 
@@ -21,75 +21,82 @@ EXC_ANCONA_PREFIXES = (
 )
 EXC_OTHER_PREFIXES = ("IAST","N")
 
-def _starts_with_any(raw_turno: str, prefixes: tuple[str, ...]) -> bool:
-    if raw_turno is None:
-        return False
-    s = str(raw_turno).upper().strip().replace(".", "").replace(" ", "")
-    return any(s.startswith(p) for p in prefixes)
 
-
-# ---------- helper prefissi deposito/turno ----------
+# ---------- helper prefissi deposito/turno (allineati ad app.py) ----------
 def _res_to_prefix(res: str) -> str | None:
-    if not isinstance(res, str): return None
+    if not isinstance(res, str):
+        return None
     r = res.upper().replace("_", " ").strip()
     if "JESI URBANO" in r or r == "JU": return "JU"
-    if "JESI" in r or r == "J":       return "J"
-    if "MARINA" in r or r == "M":     return "M"
+    if "JESI" in r or r == "J":        return "J"
+    if "MARINA" in r or r == "M":      return "M"
     if "CASTELFIDARDO" in r or "C.FID" in r or r == "C": return "C"
-    if "OSIMO" in r or r == "O":      return "O"
+    if "OSIMO" in r or r == "O":       return "O"
     if "FILOTTRANO" in r or "FILOT" in r or r == "F":    return "F"
-    if "POLVERIGI" in r or r == "P":  return "P"
-    if "OSTRA" in r or r == "D":      return "D"
+    if "POLVERIGI" in r or r == "P":   return "P"
+    if "OSTRA" in r or r == "D":       return "D"
     if "BELVED" in r or r == "B" or "DEPBELVE" in r:     return "B"
-    if "ANCONA" in r or r == "A":     return "A"
+    if "ANCONA" in r or r == "A":      return "A"
     return None
 
-def _turno_bucket(turno: str) -> str | None:
-    if not isinstance(turno, str): turno = str(turno)
-    s = turno.strip()
-    if not s or s.upper() == "ASSENTE" or s.upper() in REST_CODES:
-        return None
-    m = re.match(r"[A-Za-z]+", s)
-    if not m: return None
-    up = m.group(0).upper()
-    if up.startswith("JU"): return "JU"
-    if up.startswith("J"):  return "J"
-    return up[0]
+def _norm_turno(s) -> str:
+    """Maiuscolo, senza punti/spazi: es. ' v5. ' -> 'V5'."""
+    return str(s or "").upper().strip().replace(".", "").replace(" ", "")
+
+def _starts_with_any(raw_turno: str, prefixes: tuple[str, ...]) -> bool:
+    t = _norm_turno(raw_turno)
+    return any(t.startswith(p) for p in prefixes)
 
 def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
-    if prefix in ("J", "JU"): return {"J", "JU"}
+    """J e JU sono equivalenti; gli altri prefissi sono singoli."""
+    if prefix in {"J", "JU"}:
+        return {"J", "JU"}
     return {prefix} if prefix else set()
 
+def _should_highlight_turno(residenza, turno) -> bool:
+    """
+    True se la riga va evidenziata in grassetto (Turno/Inizio/Fine).
+    - Esclude sempre: Assente, R, RR
+    - Eccezioni:
+        * ANCONA: prefissi D1R1/D1R2/D1R5/D2R1/D2R3/D2R6, NP, ASC, V5, LU MA ME GI VE SA DO -> NON evidenziare
+        * Altri depositi: IAST, N -> NON evidenziare
+    - Regola standard: J e JU equivalenti; per il resto usa la prima lettera del turno.
+    """
+    t = _norm_turno(turno)
+    if not t or t in {"ASSENTE", *REST_CODES}:
+        return False
+
+    rp = _res_to_prefix(residenza)
+
+    # eccezioni
+    if rp == "A":  # ANCONA
+        if _starts_with_any(t, EXC_ANCONA_PREFIXES):
+            return False
+    else:
+        if _starts_with_any(t, EXC_OTHER_PREFIXES):
+            return False
+
+    # famiglia accettata per quella residenza
+    accepted = _accepted_prefixes_for_res(rp)
+
+    # bucket del turno
+    if t.startswith("JU"):
+        b = "JU"
+    elif t.startswith("J"):
+        b = "J"
+    else:
+        b = t[0] if t else None
+
+    if not rp or not b:
+        return False
+
+    return b not in accepted
+
 def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
-    """
-    True se la riga è in 'trasferta' (turno non appartiene ai prefissi accettati).
-    Considera J e JU equivalenti; esclude Assente, R/RR e le eccezioni richieste.
-    """
+    """Serie booleana con True sulle righe da evidenziare (trasferte fuori regola + no eccezioni)."""
     if "Residenza" not in df.columns or "Turno" not in df.columns:
         return pd.Series(False, index=df.index)
-
-    def _is_trasferta(row) -> bool:
-        turn_up = str(row["Turno"]).strip().upper()
-        if turn_up in REST_CODES or turn_up == "ASSENTE":
-            return False
-
-        res_pref = _res_to_prefix(row["Residenza"])
-
-        # eccezioni
-        if res_pref == "A":  # ANCONA
-            if _starts_with_any(turn_up, EXC_ANCONA_PREFIXES):
-                return False
-        else:
-            if _starts_with_any(turn_up, EXC_OTHER_PREFIXES):
-                return False
-
-        # regola standard
-        bucket = _turno_bucket(turn_up)
-        if res_pref is None or bucket is None:
-            return False
-        return bucket not in _accepted_prefixes_for_res(res_pref)
-
-    return df.apply(_is_trasferta, axis=1)
+    return df.apply(lambda r: _should_highlight_turno(r.get("Residenza"), r.get("Turno")), axis=1)
 
 
 # ---------- shaping tabella ----------
@@ -110,7 +117,7 @@ def _collapse_repeats(gdf: pd.DataFrame,
 def _table_data_for(df: pd.DataFrame, para_style: ParagraphStyle):
     """
     Applica DISPLAY_ORDER, rimuove 'Residenza' e converte la colonna Note in Paragraph
-    per il word-wrapping.
+    per il word-wrapping. Sostituisce '*' con <br/> (a capo forzato).
     """
     cols = [c for c in DISPLAY_ORDER if c in df.columns]
     dfp = df.copy()
@@ -126,7 +133,7 @@ def _table_data_for(df: pd.DataFrame, para_style: ParagraphStyle):
         idx_note = header.index("Indennità e note")
         for r in rows:
             txt = str(r[idx_note])
-            txt = escape(txt).replace("*", "<br/>")   # prima escape, poi inserisco <br/>
+            txt = escape(txt).replace("*", "<br/>")  # prima escape, poi <br/> per '*'
             r[idx_note] = Paragraph(txt, para_style)
 
     return [header] + rows
@@ -134,9 +141,8 @@ def _table_data_for(df: pd.DataFrame, para_style: ParagraphStyle):
 def _calc_col_widths(page_width_mm: float) -> list:
     """
     Calcola larghezze colonne in mm usando tutto lo spazio disponibile.
-    Ordine colonne: Matricola, Cognome e Nome, Turno, Inizio, Fine, Indennità e note
+    Ordine: Matricola, Cognome e Nome, Turno, Inizio, Fine, Indennità e note
     """
-    # larghezze “minime” per le prime 5
     w_matricola = 24 * mm
     w_nome      = 60 * mm
     w_turno     = 22 * mm
@@ -146,6 +152,7 @@ def _calc_col_widths(page_width_mm: float) -> list:
     w_note = max(30 * mm, page_width_mm - used)  # il resto alla colonna Note (min 30mm)
     return [w_matricola, w_nome, w_turno, w_inizio, w_fine, w_note]
 
+
 # ---------- build PDF ----------
 def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
               logo_path: Path | None = None, title: str = "Servizio Giornaliero",
@@ -153,8 +160,8 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
     """
     Crea un PDF raggruppato per Residenza.
     - Usa tutta la larghezza della pagina, la colonna Note prende lo spazio residuo
-    - Word-wrap nelle Note
-    - Grassetto Turno/Inizio/Fine per le trasferte (J/JU equivalenti; R/RR NON in grassetto)
+    - Word-wrap nelle Note (con * = a capo forzato)
+    - Grassetto Turno/Inizio/Fine per le trasferte (J/JU equivalenti; R/RR/Assente ed eccezioni NON in grassetto)
     """
     # Margini e doc
     right=10*mm; left=10*mm; top=12*mm; bottom=12*mm
@@ -164,11 +171,22 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
     page_w = A4[0] - left - right
 
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("TitleTight", parent=styles["Title"], fontName="Helvetica-Bold", fontSize=18, leading=20, textColor=colors.red, spaceAfter=6, spaceBefore=0)
+    title_style = ParagraphStyle(
+        "TitleTight",
+        parent=styles["Title"],
+        fontName="Helvetica-Bold",
+        fontSize=18,
+        leading=20,
+        textColor=colors.red,
+        spaceAfter=6,
+        spaceBefore=0,
+        alignment=TA_CENTER,
+    )
     group_style = ParagraphStyle("GroupTitle", parent=styles["Heading2"],
-                                 fontSize=14, leading=16, spaceBefore=6, spaceAfter=2, alignment = TA_CENTER)
+                                 fontSize=14, leading=16, spaceBefore=6, spaceAfter=2,
+                                 alignment=TA_CENTER)
     note_style  = ParagraphStyle("NoteBody", parent=styles["BodyText"],
-                                 leading=12, wordWrap="CJK")  # wrap aggressivo se ci sono parole lunghe
+                                 leading=12, wordWrap="CJK")  # wrap aggressivo se parole lunghe
 
     elems = []
 
@@ -178,7 +196,8 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
 
     if logo_path and logo_path.exists():
         elems.append(Spacer(1, 2*mm))
-        img = Image(str(logo_path)); img._restrictSize(40*mm, 15*mm)
+        img = Image(str(logo_path))
+        img._restrictSize(40*mm, 15*mm)
         elems.append(img)
 
     # Grouping per Residenza
@@ -238,7 +257,7 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
             base_style.append(("ALIGN", (idx_fine,1), (idx_fine,-1), "CENTER"))
 
         # Grassetto per trasferte (solo Turno/Inizio/Fine)
-        for i, is_tr in enumerate(trasferte.tolist(), start=1):
+        for i, is_tr in enumerate(trasferte.tolist(), start=1):  # +1: salta l'header
             if not is_tr:
                 continue
             for cidx in col_idx.values():
