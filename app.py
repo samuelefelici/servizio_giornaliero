@@ -13,6 +13,15 @@ import pandas as pd
 
 REST_CODES = {"R", "RR"}   # riposo
 
+# >>>>>>>>>>>>>>>>> ECCEZIONI E PREFISSI <<<<<<<<<<<<<<<<<
+EXC_ANCONA_PREFIXES = (
+    "D1R1","D1R2","D1R5","D2R1","D2R3","D2R6",
+    "NP","ASC","V5",
+    "LU","MA","ME","GI","VE","SA","DO",
+)
+EXC_OTHER_PREFIXES = ("IAST","N")
+# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
 # --- Import moduli del progetto (con gestione errore) ---
 try:
     from src.process import read_input_excel, transform_dataframe, debug_probe
@@ -77,38 +86,71 @@ def _res_to_prefix(res: str) -> str | None:
     if "ANCONA" in r or r == "A":     return "A"
     return None
 
-def _turno_bucket(turno: str) -> str | None:
-    """Bucket turno: JU…, J… (non JU) o prima lettera; esclude Assente/R/RR."""
-    if not isinstance(turno, str): turno = str(turno)
-    s = turno.strip()
-    if not s or s.upper() == "ASSENTE" or s.upper() in REST_CODES:
-        return None
-    m = re.match(r"[A-Za-z]+", s)
-    if not m: return None
-    up = m.group(0).upper()
-    if up.startswith("JU"): return "JU"
-    if up.startswith("J"):  return "J"
-    return up[0]
-
-def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
-    if prefix in ("J", "JU"): return {"J", "JU"}
-    return {prefix} if prefix else set()
-
-# >>>>>>>>>>>>>>>>> NUOVE ECCEZIONI <<<<<<<<<<<<<<<<<
-EXC_ANCONA_PREFIXES = (
-    "D1R1","D1R2","D1R5","D2R1","D2R3","D2R6",
-    "NP","ASC","V5",
-    "LU","MA","ME","GI","VE","SA","DO",
-)
-EXC_OTHER_PREFIXES = ("IAST","N")
+def _norm_turno(s) -> str:
+    """Normalizza il codice turno per match robusti (maiuscolo, senza punti/spazi)."""
+    return str(s or "").upper().strip().replace(".", "").replace(" ", "")
 
 def _starts_with_any(raw_turno: str, prefixes: tuple[str, ...]) -> bool:
-    """Controlla se il turno inizia con uno dei prefissi (ignora spazi e punti)."""
-    if raw_turno is None:
+    """True se il turno normalizzato inizia con uno dei prefissi dati."""
+    t = _norm_turno(raw_turno)
+    return any(t.startswith(p) for p in prefixes)
+
+def _turno_bucket(turno: str) -> str | None:
+    """
+    Bucket turno: 'JU' se parte con JU, altrimenti 'J' se parte con J,
+    altrimenti prima lettera; esclude Assente/R/RR.
+    """
+    t = _norm_turno(turno)
+    if not t or t in {"ASSENTE", *REST_CODES}:
+        return None
+    if t.startswith("JU"): return "JU"
+    if t.startswith("J"):  return "J"
+    return t[0]
+
+def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
+    """Prefissi considerati 'di casa' per la residenza (J e JU sono equivalenti)."""
+    if prefix in {"J", "JU"}:
+        return {"J", "JU"}
+    return {prefix} if prefix else set()
+
+def _should_highlight_turno(residenza, turno) -> bool:
+    """
+    Decide se evidenziare (grassetto) Turno/Inizio/Fine per la riga.
+    - Esclude sempre: Assente, R, RR
+    - Eccezioni:
+        * Residenza ANCONA: D1R1/D1R2/D1R5/D2R1/D2R3/D2R6, NP, ASC, V5, LU/MA/ME/GI/VE/SA/DO -> NO grassetto
+        * Altri depositi: IAST, N -> NO grassetto
+    - Regola standard: J e JU equivalenti; altrimenti prima lettera del turno.
+    """
+    t = _norm_turno(turno)
+    if not t or t in {"ASSENTE", *REST_CODES}:
         return False
-    s = str(raw_turno).upper().strip().replace(".", "").replace(" ", "")
-    return any(s.startswith(p) for p in prefixes)
-# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+    rp = _res_to_prefix(residenza)
+
+    # eccezioni
+    if rp == "A":  # ANCONA
+        if _starts_with_any(t, EXC_ANCONA_PREFIXES):
+            return False
+    else:
+        if _starts_with_any(t, EXC_OTHER_PREFIXES):
+            return False
+
+    # famiglia accettata per residenza
+    accepted = _accepted_prefixes_for_res(rp)
+
+    # bucket del turno
+    if t.startswith("JU"):
+        b = "JU"
+    elif t.startswith("J"):
+        b = "J"
+    else:
+        b = t[0] if t else None
+
+    if not rp or not b:
+        return False
+
+    return b not in accepted
 
 def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
     """
@@ -117,29 +159,7 @@ def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
     """
     if "Residenza" not in df.columns or "Turno" not in df.columns:
         return pd.Series(False, index=df.index)
-
-    def _is_trasferta(row) -> bool:
-        turn_up = str(row["Turno"]).strip().upper()
-        if turn_up in {"ASSENTE", "R", "RR"}:
-            return False
-
-        res_pref = _res_to_prefix(row["Residenza"])
-
-        # eccezioni: se matcha, non evidenziare
-        if res_pref == "A":  # ANCONA
-            if _starts_with_any(turn_up, EXC_ANCONA_PREFIXES):
-                return False
-        else:
-            if _starts_with_any(turn_up, EXC_OTHER_PREFIXES):
-                return False
-
-        # regola standard: J e JU equivalenti
-        bucket = _turno_bucket(turn_up)
-        if res_pref is None or bucket is None:
-            return False
-        return bucket not in _accepted_prefixes_for_res(res_pref)
-
-    return df.apply(_is_trasferta, axis=1)
+    return df.apply(lambda r: _should_highlight_turno(r.get("Residenza"), r.get("Turno")), axis=1)
 
 def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series) -> str:
     """
