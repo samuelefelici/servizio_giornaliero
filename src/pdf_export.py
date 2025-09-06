@@ -309,10 +309,17 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
 
     # Footer (solo ultima pagina)
     if exported_at is None:
-        exported_at = datetime.now()
+        exported_at = datetime.now(_TZ_ROMA)
     footer_text = exported_at.strftime("servizio esportato il %d/%m/%Y alle %H:%M")
 
     def _canvas_factory(*args, **kwargs):
-        return _LastPageFooterCanvas(*args, exported_text=footer_text, **kwargs)
+        # passa anche i margini così il canvas può calcolare la posizione
+        return _LastPageFooterCanvas(
+            *args,
+            exported_text=footer_text,
+            right_margin=right,
+            bottom_margin=bottom,
+            **kwargs
+        )
 
     doc.build(elems, canvasmaker=_canvas_factory)
