@@ -12,6 +12,9 @@ from datetime import datetime
 from pathlib import Path
 import pandas as pd
 import re
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+from reportlab.pdfbase.pdfmetrics import stringWidth
+
 
 # TZ Europe/Rome
 try:
@@ -122,44 +125,58 @@ def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
 def _header_table(title_para: Paragraph,
                   logo_path: Path | None,
                   page_w: float,
-                  small_note_para: Paragraph) -> Table:
+                  export_text: str,
+                  small_style: ParagraphStyle) -> Table:
     """
     Riga con titolo (sx) e colonna destra con:
-    [logo]
-    [nota in piccolo allineata a destra]
+    [logo centrato]
+    [nota allineata a destra]
+    La larghezza della colonna destra viene calcolata in base alla nota,
+    così il testo arriva esattamente al margine destro pagina.
     """
-    # build right column: image + small note
+    # misura la larghezza del testo (pt)
+    font_name = getattr(small_style, "fontName", "Helvetica")
+    font_size = getattr(small_style, "fontSize", 8)
+    text_w    = stringWidth(export_text, font_name, font_size)
+
+    # colonna destra larga quanto serve (nota + un piccolo margine)
+    right_w = max(MAX_LOGO_W, text_w + 4*mm)
+
+    # logo
     if logo_path and logo_path.exists():
         img = Image(str(logo_path))
         img._restrictSize(MAX_LOGO_W, MAX_LOGO_H)
     else:
         img = Spacer(MAX_LOGO_W, MAX_LOGO_H)
 
-    right_col = Table(
-        [[img],
-         [small_note_para]],
-        colWidths=[MAX_LOGO_W]
-    )
+    # nota (Paragraph) allineata a destra
+    small_para = Paragraph(escape(export_text), small_style)
+
+    # tabella della colonna destra: logo centrato, nota a destra
+    right_col = Table([[img],
+                       [small_para]],
+                      colWidths=[right_w])
     right_col.setStyle(TableStyle([
-        ("ALIGN", (0, 0), (0, 0), "RIGHT"),   # logo a destra
-        ("ALIGN", (0, 1), (0, 1), "RIGHT"),   # nota a destra
-        ("LEFTPADDING",  (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING",   (0, 0), (-1, -1), 0),
-        ("BOTTOMPADDING",(0, 0), (-1, -1), 0),
+        ("ALIGN",  (0,0), (0,0), "CENTER"),  # logo centrato
+        ("ALIGN",  (0,1), (0,1), "RIGHT"),   # nota a destra
+        ("TOPPADDING",   (0,1), (0,1), 6),   # <-- più staccata dal logo (6pt)
+        ("LEFTPADDING",  (0,0), (-1,-1), 0),
+        ("RIGHTPADDING", (0,0), (-1,-1), 0),
+        ("BOTTOMPADDING",(0,0), (-1,-1), 0),
     ]))
 
-    # main header row: title (left) + right_col (right)
+    # riga header: titolo a sinistra, colonna destra (logo+nota) a destra
     tbl = Table([[title_para, right_col]],
-                colWidths=[page_w - MAX_LOGO_W, MAX_LOGO_W])
+                colWidths=[page_w - right_w, right_w])
     tbl.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LEFTPADDING",  (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING",   (0, 0), (-1, -1), 0),
-        ("BOTTOMPADDING",(0, 0), (-1, -1), 4),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ("LEFTPADDING",  (0,0), (-1,-1), 0),
+        ("RIGHTPADDING", (0,0), (-1,-1), 0),
+        ("TOPPADDING",   (0,0), (-1,-1), 0),
+        ("BOTTOMPADDING",(0,0), (-1,-1), 4),
     ]))
     return tbl
+
 
 # ======================= Shaping tabella =======================
 def _collapse_repeats(gdf: pd.DataFrame,
@@ -266,6 +283,7 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
         textColor=colors.grey,
         spaceBefore=1,
         spaceAfter=0,
+        alignment=TA_RIGHT,
     )
 
     elems: list = []
@@ -278,8 +296,7 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
     # Header: titolo + (logo sopra, export_text sotto)
     header_text = f"Servizio Giornaliero: {meta.get('giorno','')} {meta.get('data','')}"
     title_para  = Paragraph(header_text, title_style)
-    small_para  = Paragraph(export_text, small_note_style)
-    elems.append(_header_table(title_para, logo_path, page_w, small_para))
+    elems.append(_header_table(title_para, logo_path, page_w, export_text, small_note_style))
 
     # Raggruppamento per Residenza
     if "Residenza" not in df.columns:
