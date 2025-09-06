@@ -12,6 +12,11 @@ import streamlit as st
 import pandas as pd
 
 REST_CODES = {"R", "RR"}   # riposo
+# Eccezioni GLOBALI: valgono per tutti i depositi
+GLOBAL_EXC_PATTERNS = (
+    r"^IAST$",   # esattamente IAST
+    r"^N$",      # esattamente N
+)
 
 # >>>>>>>>>>>>>>>>> ECCEZIONI E PREFISSI <<<<<<<<<<<<<<<<<
 EXC_ANCONA_PREFIXES = (
