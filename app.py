@@ -119,32 +119,25 @@ def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
     return {prefix} if prefix else set()
 
 def _should_highlight_turno(residenza, turno) -> bool:
-    """
-    Decide se evidenziare (grassetto) Turno/Inizio/Fine per la riga.
-    - Esclude sempre: Assente, R, RR
-    - Eccezioni:
-        * Residenza ANCONA: D1R1/D1R2/D1R5/D2R1/D2R3/D2R6, NP, ASC, V5, LU/MA/ME/GI/VE/SA/DO -> NO grassetto
-        * Altri depositi: IAST, N -> NO grassetto
-    - Regola standard: J e JU equivalenti; altrimenti prima lettera del turno.
-    """
     t = _norm_turno(turno)
     if not t or t in {"ASSENTE", *REST_CODES}:
         return False
 
+    # >>> NUOVO: eccezioni GLOBALI (valgono sempre)
+    if _match_any(t, GLOBAL_EXC_PATTERNS):
+        return False
+
     rp = _res_to_prefix(residenza)
 
-    # eccezioni
+    # Eccezioni specifiche per deposito
     if rp == "A":  # ANCONA
-        if _starts_with_any(t, EXC_ANCONA_PREFIXES):
+        if _match_any(t, EXC_ANCONA_PATTERNS):
             return False
     else:
-        if _starts_with_any(t, EXC_OTHER_PREFIXES):
+        if _match_any(t, EXC_OTHER_PATTERNS):
             return False
 
-    # famiglia accettata per residenza
-    accepted = _accepted_prefixes_for_res(rp)
-
-    # bucket del turno
+    # Regola standard J/JU equivalenti, altrimenti prima lettera
     if t.startswith("JU"):
         b = "JU"
     elif t.startswith("J"):
@@ -154,8 +147,8 @@ def _should_highlight_turno(residenza, turno) -> bool:
 
     if not rp or not b:
         return False
+    return b not in _accepted_prefixes_for_res(rp)
 
-    return b not in accepted
 
 def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
     """
