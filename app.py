@@ -94,20 +94,50 @@ def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
     if prefix in ("J", "JU"): return {"J", "JU"}
     return {prefix} if prefix else set()
 
+# >>>>>>>>>>>>>>>>> NUOVE ECCEZIONI <<<<<<<<<<<<<<<<<
+EXC_ANCONA_PREFIXES = (
+    "D1R1","D1R2","D1R5","D2R1","D2R3","D2R6",
+    "NP","ASC","V5",
+    "LU","MA","ME","GI","VE","SA","DO",
+)
+EXC_OTHER_PREFIXES = ("IAST","N")
+
+def _starts_with_any(raw_turno: str, prefixes: tuple[str, ...]) -> bool:
+    """Controlla se il turno inizia con uno dei prefissi (ignora spazi e punti)."""
+    if raw_turno is None:
+        return False
+    s = str(raw_turno).upper().strip().replace(".", "").replace(" ", "")
+    return any(s.startswith(p) for p in prefixes)
+# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
 def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
-    """True se il turno è ‘fuori deposito’ (J/JU equivalenti; R/RR/Assente esclusi)."""
+    """
+    True se il turno è ‘fuori deposito’ (J/JU equivalenti; R/RR/Assente esclusi)
+    e NON cade nelle liste di eccezione definite.
+    """
     if "Residenza" not in df.columns or "Turno" not in df.columns:
         return pd.Series(False, index=df.index)
 
     def _is_trasferta(row) -> bool:
-        turn = str(row["Turno"]).strip().upper()
-        if turn in REST_CODES or turn == "ASSENTE":
+        turn_up = str(row["Turno"]).strip().upper()
+        if turn_up in {"ASSENTE", "R", "RR"}:
             return False
-        rp = _res_to_prefix(row["Residenza"])
-        tb = _turno_bucket(row["Turno"])
-        if rp is None or tb is None:
+
+        res_pref = _res_to_prefix(row["Residenza"])
+
+        # eccezioni: se matcha, non evidenziare
+        if res_pref == "A":  # ANCONA
+            if _starts_with_any(turn_up, EXC_ANCONA_PREFIXES):
+                return False
+        else:
+            if _starts_with_any(turn_up, EXC_OTHER_PREFIXES):
+                return False
+
+        # regola standard: J e JU equivalenti
+        bucket = _turno_bucket(turn_up)
+        if res_pref is None or bucket is None:
             return False
-        return tb not in _accepted_prefixes_for_res(rp)
+        return bucket not in _accepted_prefixes_for_res(res_pref)
 
     return df.apply(_is_trasferta, axis=1)
 
@@ -206,7 +236,7 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
         # Titolo rosso dinamico (anteprima)
         st.markdown(
             f"""
-            <h2 style="color:#d00; font-weight:800; margin: 0.5rem 0 0.5rem 0;">
+            <h2 style="color:#d00; font-weight:800; margin: 0.5rem 0 0.5rem 0; text-align:center;">
               Servizio Giornaliero: {meta.get('giorno','')} {meta.get('data','')}
             </h2>
             """,
@@ -244,7 +274,6 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
                     f"<h3 style='text-align:center; margin: 0.5rem 0 0.25rem 0;'>{res}</h3>",
                     unsafe_allow_html=True,
                 )
-
 
                 g_disp = _reorder_for_display(g)
                 mask   = _trasferta_mask(g)     # calcolata sull’indice originale
