@@ -2,6 +2,7 @@
 import os, sys, re, io, tempfile
 from pathlib import Path
 from html import escape as html_escape
+from datetime import datetime
 
 # --- Path per import locali ---
 ROOT = Path(__file__).resolve().parent
