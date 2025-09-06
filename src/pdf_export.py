@@ -9,6 +9,7 @@ from reportlab.lib.units import mm
 from reportlab.lib.enums import TA_CENTER
 from reportlab.pdfgen import canvas as rl_canvas
 from xml.sax.saxutils import escape
+from io import BytesIO
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
@@ -49,7 +50,6 @@ MAX_LOGO_H = 22.5 * mm
 
 # ======================= Utility evidenziazione =======================
 def _res_to_prefix(res: str) -> str | None:
-    """Mappa la residenza al prefisso atteso (J e JU considerati 'di casa' insieme)."""
     if not isinstance(res, str):
         return None
     r = res.upper().replace("_", " ").strip()
@@ -66,44 +66,29 @@ def _res_to_prefix(res: str) -> str | None:
     return None
 
 def _norm_turno(s) -> str:
-    """Normalizza il codice turno per match robusti (maiuscolo, senza punti/spazi)."""
     return str(s or "").upper().strip().replace(".", "").replace(" ", "")
 
 def _starts_with_any(raw_turno: str, prefixes: tuple[str, ...]) -> bool:
-    """True se il turno normalizzato inizia con uno dei prefissi dati."""
     t = _norm_turno(raw_turno)
     return any(t.startswith(p) for p in prefixes)
 
 def _match_any(s: str, patterns: tuple[str, ...]) -> bool:
-    """True se la stringa matcha uno dei pattern regex (tipicamente ^...$ per match esatto)."""
     return any(re.match(p, s) for p in patterns)
 
 def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
-    """Famiglia di prefissi 'di casa' per la residenza (J e JU equivalenti)."""
     if prefix in {"J", "JU"}:
         return {"J", "JU"}
     return {prefix} if prefix else set()
 
 def _should_highlight_turno(residenza, turno) -> bool:
-    """
-    Decide se evidenziare (grassetto) Turno/Inizio/Fine per la riga.
-    - Esclude sempre: Assente, R, RR
-    - Eccezioni GLOBALI (match esatto): IAST, N -> mai grassetto
-    - Eccezioni ANCONA (prefissi): D1R1/D1R2/.../D2R6, NP, ASC, V5, LU/MA/ME/GI/VE/SA/DO -> no grassetto
-    - Eccezioni altri depositi (prefissi): IAST, N -> no grassetto
-    - Regola standard: J e JU equivalenti; altrimenti prima lettera del turno.
-    """
     t = _norm_turno(turno)
     if not t or t in {"ASSENTE", *REST_CODES}:
         return False
-
-    # Eccezioni globali (match esatto)
     if _match_any(t, GLOBAL_EXC_PATTERNS):
         return False
 
     rp = _res_to_prefix(residenza)
 
-    # Eccezioni per deposito
     if rp == "A":  # ANCONA
         if _starts_with_any(t, EXC_ANCONA_PREFIXES):
             return False
@@ -111,10 +96,8 @@ def _should_highlight_turno(residenza, turno) -> bool:
         if _starts_with_any(t, EXC_OTHER_PREFIXES):
             return False
 
-    # Famiglia accettata per residenza
     accepted = _accepted_prefixes_for_res(rp)
 
-    # Bucket del turno
     if t.startswith("JU"):
         b = "JU"
     elif t.startswith("J"):
@@ -127,17 +110,12 @@ def _should_highlight_turno(residenza, turno) -> bool:
     return b not in accepted
 
 def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
-    """Serie booleana con True sulle righe da evidenziare (trasferte fuori regola + no eccezioni)."""
     if "Residenza" not in df.columns or "Turno" not in df.columns:
         return pd.Series(False, index=df.index)
     return df.apply(lambda r: _should_highlight_turno(r.get("Residenza"), r.get("Turno")), axis=1)
 
-# ======================= Header & Footer =======================
+# ======================= Header helper =======================
 def _header_table(title_para: Paragraph, logo_path: Path | None, page_w: float) -> Table:
-    """
-    Riga con titolo (sx) e logo (dx) che occupa tutta la larghezza.
-    Dimensioni massime del logo regolate da MAX_LOGO_W/H.
-    """
     if logo_path and logo_path.exists():
         img = Image(str(logo_path))
         img._restrictSize(MAX_LOGO_W, MAX_LOGO_H)
@@ -155,47 +133,10 @@ def _header_table(title_para: Paragraph, logo_path: Path | None, page_w: float) 
     ]))
     return tbl
 
-class _FooterCanvasV2(rl_canvas.Canvas):
-    """Footer in basso a destra SOLO sull'ultima pagina (senza creare una pagina vuota)."""
-    def __init__(self, *args, exported_text: str = "",
-                 right_margin: float = 10*mm, bottom_margin: float = 12*mm, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._saved_page_states = []
-        self._exported_text = exported_text
-        self._right_margin = right_margin
-        self._bottom_margin = bottom_margin
-
-    def showPage(self):
-        # Salva lo stato della pagina corrente ma NON chiude la pagina reale.
-        self._saved_page_states.append(dict(self.__dict__))
-        self._startPage()  # evita la pagina vuota extra
-
-    def save(self):
-        # Aggiunge anche l'ultima pagina e riproduce tutte le pagine.
-        self._saved_page_states.append(dict(self.__dict__))
-        for i, state in enumerate(self._saved_page_states):
-            self.__dict__.update(state)
-            # Footer solo sull'ULTIMA pagina
-            if i == len(self._saved_page_states) - 1:
-                self._draw_footer()
-            rl_canvas.Canvas.showPage(self)
-        rl_canvas.Canvas.save(self)
-
-    def _draw_footer(self):
-        self.saveState()
-        self.setFont("Helvetica", 8)
-        text = self._exported_text
-        w = self.stringWidth(text, "Helvetica", 8)
-        x = self._pagesize[0] - self._right_margin - w
-        y = self._bottom_margin * 0.6
-        self.drawString(x, y, text)
-        self.restoreState()
-
 # ======================= Shaping tabella =======================
 def _collapse_repeats(gdf: pd.DataFrame,
                       key_cols=("Cognome e Nome", "Matricola"),
                       collapse_cols=("Cognome e Nome", "Matricola")) -> pd.DataFrame:
-    """Sui record consecutivi della stessa persona azzera i campi ripetitivi."""
     missing = [c for c in key_cols if c not in gdf.columns]
     if missing:
         return gdf
@@ -207,10 +148,6 @@ def _collapse_repeats(gdf: pd.DataFrame,
     return g
 
 def _table_data_for(df: pd.DataFrame, para_style: ParagraphStyle):
-    """
-    Applica DISPLAY_ORDER, rimuove 'Residenza' e converte la colonna Note in Paragraph
-    per il word-wrapping. Sostituisce '*' con <br/> (a capo forzato).
-    """
     cols = [c for c in DISPLAY_ORDER if c in df.columns]
     dfp = df.copy()
     if cols:
@@ -224,47 +161,24 @@ def _table_data_for(df: pd.DataFrame, para_style: ParagraphStyle):
         idx_note = header.index("Indennità e note")
         for r in rows:
             txt = str(r[idx_note])
-            txt = escape(txt).replace("*", "<br/>")  # escape prima, poi <br/> per '*'
+            txt = escape(txt).replace("*", "<br/>")
             r[idx_note] = Paragraph(txt, para_style)
 
     return [header] + rows
 
 def _calc_col_widths(page_width: float) -> list[float]:
-    """
-    Calcola larghezze colonne (in punti) usando tutto lo spazio disponibile.
-    Ordine: Matricola, Cognome e Nome, Turno, Inizio, Fine, Indennità e note
-    """
     w_matricola = 24 * mm
     w_nome      = 60 * mm
     w_turno     = 22 * mm
     w_inizio    = 18 * mm
     w_fine      = 18 * mm
     used = w_matricola + w_nome + w_turno + w_inizio + w_fine
-    w_note = max(30 * mm, page_width - used)  # il resto alla colonna Note (min 30mm)
+    w_note = max(30 * mm, page_width - used)
     return [w_matricola, w_nome, w_turno, w_inizio, w_fine, w_note]
 
-# ======================= Build PDF =======================
-def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
-              logo_path: Path | None = None, title: str = "Servizio Giornaliero",
-              inner_sort: str = "nome", exported_at: datetime | None = None):
-    """
-    - Titolo a sinistra + logo a destra sulla stessa riga (header del documento)
-    - Footer in ultima pagina: 'servizio esportato il DATA alle ORA.' (Europe/Rome)
-    - Larghezza piena, Note che assorbe lo spazio residuo, wrapping con '*' -> newline.
-    - Grassetto su Turno/Inizio/Fine per righe in trasferta (con eccezioni).
-    """
-    # Margini/doc
-    right = 10 * mm
-    left  = 10 * mm
-    top   = 12 * mm
-    bottom= 12 * mm
-
-    doc = SimpleDocTemplate(str(path_out), pagesize=A4,
-                            rightMargin=right, leftMargin=left,
-                            topMargin=top, bottomMargin=bottom)
-    page_w = A4[0] - left - right  # larghezza utile
-
-    styles = getSampleStyleSheet()
+# ======================= Story builder (riusabile per 2 pass) =======================
+def _make_story(df: pd.DataFrame, meta: dict, logo_path: Path | None,
+                page_w: float, styles, inner_sort: str) -> list:
     title_style = ParagraphStyle(
         "TitleTight",
         parent=styles["Title"],
@@ -284,21 +198,14 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
         spaceAfter=2,
         alignment=TA_CENTER,
     )
-    note_style = ParagraphStyle(
-        "NoteBody",
-        parent=styles["BodyText"],
-        leading=12,
-        wordWrap="CJK",  # wrapping aggressivo per parole lunghe
-    )
+    note_style = ParagraphStyle("NoteBody", parent=styles["BodyText"], leading=12, wordWrap="CJK")
 
-    elems = []
-
-    # Header: titolo + logo sulla stessa riga
+    elems: list = []
     header_text = f"Servizio Giornaliero: {meta.get('giorno','')} {meta.get('data','')}"
     title_para = Paragraph(header_text, title_style)
     elems.append(_header_table(title_para, logo_path, page_w))
 
-    # Raggruppamento per Residenza
+    # Grouping per Residenza
     if "Residenza" not in df.columns:
         blocks = [("TUTTI", df)]
     else:
@@ -307,7 +214,6 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
 
     first_block = True
     for res_name, gdf in blocks:
-        # Ordinamento interno
         if inner_sort == "inizio" and "Inizio" in gdf.columns:
             by = ["Inizio"] + (["Cognome e Nome"] if "Cognome e Nome" in gdf.columns else [])
             gdf = gdf.sort_values(by=by).reset_index(drop=True)
@@ -331,17 +237,14 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
             elems.append(Spacer(1, 3 * mm))
         first_block = False
 
-        # Titolo gruppo (centrato)
         elems.append(Paragraph(res_name, group_style))
 
-        # Tabella dati
         data = _table_data_for(gdf, note_style)
         header = data[0]
 
-        # Indici colonne interessate (dinamici)
         col_idx = {name: header.index(name) for name in ["Turno", "Inizio", "Fine"] if name in header}
         idx_inizio = col_idx.get("Inizio")
-        idx_fine = col_idx.get("Fine")
+        idx_fine   = col_idx.get("Fine")
 
         col_widths = _calc_col_widths(page_w)
         tbl = Table(data, repeatRows=1, colWidths=col_widths)
@@ -352,14 +255,12 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
             ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
             ("VALIGN",     (0, 0), (-1, -1), "TOP"),
         ]
-        # Allineamento centro per Inizio/Fine
         if idx_inizio is not None:
             base_style.append(("ALIGN", (idx_inizio, 1), (idx_inizio, -1), "CENTER"))
         if idx_fine is not None:
             base_style.append(("ALIGN", (idx_fine, 1), (idx_fine, -1), "CENTER"))
 
-        # Grassetto per trasferte (solo Turno/Inizio/Fine)
-        for i, is_tr in enumerate(trasferte.tolist(), start=1):  # +1 per saltare header
+        for i, is_tr in enumerate(trasferte.tolist(), start=1):
             if not is_tr:
                 continue
             for cidx in col_idx.values():
@@ -368,19 +269,64 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
         tbl.setStyle(TableStyle(base_style))
         elems.append(tbl)
 
-    # Footer (solo ultima pagina) — orario Europe/Rome
+    return elems
+
+# ======================= Build PDF (2 pass, niente pagina extra) =======================
+class _CountPagesCanvas(rl_canvas.Canvas):
+    """Canvas minimale per contare il numero totale di pagine (prima passata)."""
+    def __init__(self, *args, counter=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._counter = counter
+        self._count = 0
+    def showPage(self):
+        self._count += 1
+        super().showPage()
+    def save(self):
+        # l'ultima pagina non chiama showPage
+        self._count += 1
+        if self._counter is not None:
+            self._counter[0] = self._count
+        super().save()
+
+def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
+              logo_path: Path | None = None, title: str = "Servizio Giornaliero",
+              inner_sort: str = "nome", exported_at: datetime | None = None):
+
+    right = 10 * mm
+    left  = 10 * mm
+    top   = 12 * mm
+    bottom= 12 * mm
+
+    styles = getSampleStyleSheet()
+    page_w = A4[0] - left - right
+
+    # -------- Pass 1: conta pagine --------
+    tmp_buf = BytesIO()
+    doc_tmp = SimpleDocTemplate(tmp_buf, pagesize=A4,
+                                rightMargin=right, leftMargin=left,
+                                topMargin=top, bottomMargin=bottom)
+    story1 = _make_story(df, meta, logo_path, page_w, styles, inner_sort)
+    page_counter = [0]
+    doc_tmp.build(story1, canvasmaker=lambda *a, **k: _CountPagesCanvas(*a, counter=page_counter, **k))
+    total_pages = page_counter[0]
+
+    # -------- Pass 2: PDF finale con footer SOLO nell'ultima pagina --------
     if exported_at is None:
         exported_at = datetime.now(_TZ_ROMA)
     footer_text = exported_at.strftime("servizio esportato il %d/%m/%Y alle %H:%M")
 
-    def _canvas_factory(*args, **kwargs):
-        # passiamo i margini per posizionare il footer
-        return _FooterCanvasV2(
-            *args,
-            exported_text=footer_text,
-            right_margin=right,
-            bottom_margin=bottom,
-            **kwargs,
-        )
+    def _draw_footer(canv, doc):
+        if canv.getPageNumber() == total_pages:
+            canv.saveState()
+            canv.setFont("Helvetica", 8)
+            w = canv.stringWidth(footer_text, "Helvetica", 8)
+            x = doc.pagesize[0] - right - w
+            y = bottom * 0.6
+            canv.drawString(x, y, footer_text)
+            canv.restoreState()
 
-    doc.build(elems, canvasmaker=_canvas_factory)
+    doc = SimpleDocTemplate(str(path_out), pagesize=A4,
+                            rightMargin=right, leftMargin=left,
+                            topMargin=top, bottomMargin=bottom)
+    story2 = _make_story(df, meta, logo_path, page_w, styles, inner_sort)
+    doc.build(story2, onFirstPage=_draw_footer, onLaterPages=_draw_footer)
