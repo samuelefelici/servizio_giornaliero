@@ -10,37 +10,46 @@ from reportlab.lib.enums import TA_CENTER
 from reportlab.pdfgen import canvas as rl_canvas
 from xml.sax.saxutils import escape
 from datetime import datetime
-import pandas as pd
 from pathlib import Path
+import pandas as pd
 import re
 
-from datetime import datetime
+# TZ Europe/Rome
 try:
-    from zoneinfo import ZoneInfo         # Python 3.9+
+    from zoneinfo import ZoneInfo  # Python 3.9+
     _TZ_ROMA = ZoneInfo("Europe/Rome")
-except Exception:
-    import pytz                           # fallback
+except Exception:  # pragma: no cover
+    import pytz
     _TZ_ROMA = pytz.timezone("Europe/Rome")
 
 from .constants import DISPLAY_ORDER
 
-REST_CODES = {"R", "RR"}
+# ======================= Costanti & regole =======================
+REST_CODES = {"R", "RR"}  # riposo
 
-# Eccezioni GLOBALI: valgono per tutti i depositi
+# Eccezioni GLOBALI: NON evidenziare mai questi turni (match esatto)
 GLOBAL_EXC_PATTERNS = (
-    r"^IAST$",   # esattamente IAST
-    r"^N$",      # esattamente N
+    r"^IAST$",  # esattamente IAST
+    r"^N$",     # esattamente N
 )
 
+# Eccezioni specifiche per ANCONA (prefissi)
 EXC_ANCONA_PREFIXES = (
-    "D1R1","D1R2","D1R5","D2R1","D2R2","D2R3","D2R6",
-    "NP","ASC","V5",
-    "LU","MA","ME","GI","VE","SA","DO",
+    "D1R1", "D1R2", "D1R5", "D2R1", "D2R2", "D2R3", "D2R6",
+    "NP", "ASC", "V5",
+    "LU", "MA", "ME", "GI", "VE", "SA", "DO",
 )
-EXC_OTHER_PREFIXES = ("IAST","N")
 
-# -------- utility evidenziazione (allineate ad app.py) --------
+# Eccezioni per gli altri depositi (prefissi)
+EXC_OTHER_PREFIXES = ("IAST", "N")
+
+# Dimensioni massime logo (regolabili)
+MAX_LOGO_W = 60 * mm
+MAX_LOGO_H = 22.5 * mm
+
+# ======================= Utility evidenziazione =======================
 def _res_to_prefix(res: str) -> str | None:
+    """Mappa la residenza al prefisso atteso (J e JU considerati 'di casa' insieme)."""
     if not isinstance(res, str):
         return None
     r = res.upper().replace("_", " ").strip()
@@ -57,31 +66,44 @@ def _res_to_prefix(res: str) -> str | None:
     return None
 
 def _norm_turno(s) -> str:
+    """Normalizza il codice turno per match robusti (maiuscolo, senza punti/spazi)."""
     return str(s or "").upper().strip().replace(".", "").replace(" ", "")
 
 def _starts_with_any(raw_turno: str, prefixes: tuple[str, ...]) -> bool:
+    """True se il turno normalizzato inizia con uno dei prefissi dati."""
     t = _norm_turno(raw_turno)
     return any(t.startswith(p) for p in prefixes)
 
 def _match_any(s: str, patterns: tuple[str, ...]) -> bool:
+    """True se la stringa matcha uno dei pattern regex (tipicamente ^...$ per match esatto)."""
     return any(re.match(p, s) for p in patterns)
 
 def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
+    """Famiglia di prefissi 'di casa' per la residenza (J e JU equivalenti)."""
     if prefix in {"J", "JU"}:
         return {"J", "JU"}
     return {prefix} if prefix else set()
 
 def _should_highlight_turno(residenza, turno) -> bool:
+    """
+    Decide se evidenziare (grassetto) Turno/Inizio/Fine per la riga.
+    - Esclude sempre: Assente, R, RR
+    - Eccezioni GLOBALI (match esatto): IAST, N -> mai grassetto
+    - Eccezioni ANCONA (prefissi): D1R1/D1R2/.../D2R6, NP, ASC, V5, LU/MA/ME/GI/VE/SA/DO -> no grassetto
+    - Eccezioni altri depositi (prefissi): IAST, N -> no grassetto
+    - Regola standard: J e JU equivalenti; altrimenti prima lettera del turno.
+    """
     t = _norm_turno(turno)
     if not t or t in {"ASSENTE", *REST_CODES}:
         return False
-    # eccezioni globali
+
+    # Eccezioni globali (match esatto)
     if _match_any(t, GLOBAL_EXC_PATTERNS):
         return False
 
     rp = _res_to_prefix(residenza)
 
-    # eccezioni per deposito
+    # Eccezioni per deposito
     if rp == "A":  # ANCONA
         if _starts_with_any(t, EXC_ANCONA_PREFIXES):
             return False
@@ -89,7 +111,10 @@ def _should_highlight_turno(residenza, turno) -> bool:
         if _starts_with_any(t, EXC_OTHER_PREFIXES):
             return False
 
-    # regola standard J/JU equivalenti
+    # Famiglia accettata per residenza
+    accepted = _accepted_prefixes_for_res(rp)
+
+    # Bucket del turno
     if t.startswith("JU"):
         b = "JU"
     elif t.startswith("J"):
@@ -99,41 +124,41 @@ def _should_highlight_turno(residenza, turno) -> bool:
 
     if not rp or not b:
         return False
-    return b not in _accepted_prefixes_for_res(rp)
+    return b not in accepted
 
 def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
+    """Serie booleana con True sulle righe da evidenziare (trasferte fuori regola + no eccezioni)."""
     if "Residenza" not in df.columns or "Turno" not in df.columns:
         return pd.Series(False, index=df.index)
     return df.apply(lambda r: _should_highlight_turno(r.get("Residenza"), r.get("Turno")), axis=1)
 
-# -------- header & footer helpers --------
+# ======================= Header & Footer =======================
 def _header_table(title_para: Paragraph, logo_path: Path | None, page_w: float) -> Table:
-    """Riga con titolo (sx) e logo (dx) che occupa tutta la larghezza."""
-    max_logo_w, max_logo_h = 60*mm, 22.5*mm
+    """
+    Riga con titolo (sx) e logo (dx) che occupa tutta la larghezza.
+    Dimensioni massime del logo regolate da MAX_LOGO_W/H.
+    """
     if logo_path and logo_path.exists():
         img = Image(str(logo_path))
-        img._restrictSize(max_logo_w, max_logo_h)
+        img._restrictSize(MAX_LOGO_W, MAX_LOGO_H)
     else:
-        img = Spacer(max_logo_w, max_logo_h)
+        img = Spacer(MAX_LOGO_W, MAX_LOGO_H)
 
-    tbl = Table([[title_para, img]],
-                colWidths=[page_w - max_logo_w, max_logo_w])
+    tbl = Table([[title_para, img]], colWidths=[page_w - MAX_LOGO_W, MAX_LOGO_W])
     tbl.setStyle(TableStyle([
-        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-        ("ALIGN",  (1,0), (1,0),  "RIGHT"),
-        ("LEFTPADDING",  (0,0), (-1,-1), 0),
-        ("RIGHTPADDING", (0,0), (-1,-1), 0),
-        ("TOPPADDING",   (0,0), (-1,-1), 0),
-        ("BOTTOMPADDING",(0,0), (-1,-1), 4),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN",  (1, 0), (1, 0),  "RIGHT"),
+        ("LEFTPADDING",  (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING",   (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING",(0, 0), (-1, -1), 4),
     ]))
     return tbl
 
-# --- sostituisci tutta la classe con questa ---
-class _LastPageFooterCanvas(rl_canvas.Canvas):
+class _FooterCanvasV2(rl_canvas.Canvas):
     """Disegna un testo in piccolo in basso a destra SOLO sull'ultima pagina."""
     def __init__(self, *args, exported_text: str = "",
-                 right_margin: float = 10*mm, bottom_margin: float = 12*mm,
-                 **kwargs):
+                 right_margin: float = 10*mm, bottom_margin: float = 12*mm, **kwargs):
         super().__init__(*args, **kwargs)
         self._saved_page_states = []
         self._exported_text = exported_text
@@ -141,37 +166,36 @@ class _LastPageFooterCanvas(rl_canvas.Canvas):
         self._bottom_margin = bottom_margin
 
     def showPage(self):
-        # salva lo stato della pagina corrente poi passa alla successiva
+        # salva lo stato della pagina e passa alla successiva
         self._saved_page_states.append(dict(self.__dict__))
         super().showPage()
 
     def save(self):
-        # salva anche l'ultima pagina
+        # include anche l'ultima pagina
         self._saved_page_states.append(dict(self.__dict__))
         for i, state in enumerate(self._saved_page_states):
             self.__dict__.update(state)
-            # disegna il footer solo sull'ULTIMA pagina
             if i == len(self._saved_page_states) - 1:
+                # footer SOLO sull'ultima pagina
                 self._draw_footer()
             super().showPage()
         super().save()
 
     def _draw_footer(self):
-        """Usa i margini e la pagesize memorizzati nell'istanza."""
         self.saveState()
         self.setFont("Helvetica", 8)
-        footer_text = self._exported_text
-        w = self.stringWidth(footer_text, "Helvetica", 8)
+        text = self._exported_text
+        w = self.stringWidth(text, "Helvetica", 8)
         x = self._pagesize[0] - self._right_margin - w
         y = self._bottom_margin * 0.6
-        self.drawString(x, y, footer_text)
+        self.drawString(x, y, text)
         self.restoreState()
 
-
-# -------- shaping tabella --------
+# ======================= Shaping tabella =======================
 def _collapse_repeats(gdf: pd.DataFrame,
                       key_cols=("Cognome e Nome", "Matricola"),
                       collapse_cols=("Cognome e Nome", "Matricola")) -> pd.DataFrame:
+    """Sui record consecutivi della stessa persona azzera i campi ripetitivi."""
     missing = [c for c in key_cols if c not in gdf.columns]
     if missing:
         return gdf
@@ -183,6 +207,10 @@ def _collapse_repeats(gdf: pd.DataFrame,
     return g
 
 def _table_data_for(df: pd.DataFrame, para_style: ParagraphStyle):
+    """
+    Applica DISPLAY_ORDER, rimuove 'Residenza' e converte la colonna Note in Paragraph
+    per il word-wrapping. Sostituisce '*' con <br/> (a capo forzato).
+    """
     cols = [c for c in DISPLAY_ORDER if c in df.columns]
     dfp = df.copy()
     if cols:
@@ -192,59 +220,82 @@ def _table_data_for(df: pd.DataFrame, para_style: ParagraphStyle):
     header = list(dfp.columns)
     rows = dfp.fillna("").values.tolist()
 
-    # Note con a capo automatico + a capo forzato su "*"
     if "Indennità e note" in header:
         idx_note = header.index("Indennità e note")
         for r in rows:
             txt = str(r[idx_note])
-            txt = escape(txt).replace("*", "<br/>")
+            txt = escape(txt).replace("*", "<br/>")  # escape prima, poi <br/> per '*'
             r[idx_note] = Paragraph(txt, para_style)
 
     return [header] + rows
 
-def _calc_col_widths(page_width_mm: float) -> list:
+def _calc_col_widths(page_width: float) -> list[float]:
+    """
+    Calcola larghezze colonne (in punti) usando tutto lo spazio disponibile.
+    Ordine: Matricola, Cognome e Nome, Turno, Inizio, Fine, Indennità e note
+    """
     w_matricola = 24 * mm
     w_nome      = 60 * mm
     w_turno     = 22 * mm
     w_inizio    = 18 * mm
     w_fine      = 18 * mm
     used = w_matricola + w_nome + w_turno + w_inizio + w_fine
-    w_note = max(30 * mm, page_width_mm - used)
+    w_note = max(30 * mm, page_width - used)  # il resto alla colonna Note (min 30mm)
     return [w_matricola, w_nome, w_turno, w_inizio, w_fine, w_note]
 
-# -------- build PDF --------
+# ======================= Build PDF =======================
 def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
               logo_path: Path | None = None, title: str = "Servizio Giornaliero",
               inner_sort: str = "nome", exported_at: datetime | None = None):
     """
     - Titolo a sinistra + logo a destra sulla stessa riga (header del documento)
-    - Footer in ultima pagina: 'servizio esportato il DATA alle ORA.'
+    - Footer in ultima pagina: 'servizio esportato il DATA alle ORA.' (Europe/Rome)
     - Larghezza piena, Note che assorbe lo spazio residuo, wrapping con '*' -> newline.
+    - Grassetto su Turno/Inizio/Fine per righe in trasferta (con eccezioni).
     """
-    right=10*mm; left=10*mm; top=12*mm; bottom=12*mm
+    # Margini/doc
+    right = 10 * mm
+    left  = 10 * mm
+    top   = 12 * mm
+    bottom= 12 * mm
+
     doc = SimpleDocTemplate(str(path_out), pagesize=A4,
                             rightMargin=right, leftMargin=left,
                             topMargin=top, bottomMargin=bottom)
-    page_w = A4[0] - left - right
+    page_w = A4[0] - left - right  # larghezza utile
 
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle(
-        "TitleTight", parent=styles["Title"],
-        fontName="Helvetica-Bold", fontSize=18, leading=20,
-        textColor=colors.red, spaceAfter=6, spaceBefore=0
+        "TitleTight",
+        parent=styles["Title"],
+        fontName="Helvetica-Bold",
+        fontSize=18,
+        leading=20,
+        textColor=colors.red,
+        spaceAfter=6,
+        spaceBefore=0,
     )
     group_style = ParagraphStyle(
-        "GroupTitle", parent=styles["Heading2"],
-        fontSize=14, leading=16, spaceBefore=6, spaceAfter=2, alignment=TA_CENTER
+        "GroupTitle",
+        parent=styles["Heading2"],
+        fontSize=14,
+        leading=16,
+        spaceBefore=6,
+        spaceAfter=2,
+        alignment=TA_CENTER,
     )
-    note_style  = ParagraphStyle("NoteBody", parent=styles["BodyText"],
-                                 leading=12, wordWrap="CJK")
+    note_style = ParagraphStyle(
+        "NoteBody",
+        parent=styles["BodyText"],
+        leading=12,
+        wordWrap="CJK",  # wrapping aggressivo per parole lunghe
+    )
 
     elems = []
 
     # Header: titolo + logo sulla stessa riga
     header_text = f"Servizio Giornaliero: {meta.get('giorno','')} {meta.get('data','')}"
-    title_para  = Paragraph(header_text, title_style)
+    title_para = Paragraph(header_text, title_style)
     elems.append(_header_table(title_para, logo_path, page_w))
 
     # Raggruppamento per Residenza
@@ -256,49 +307,59 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
 
     first_block = True
     for res_name, gdf in blocks:
+        # Ordinamento interno
         if inner_sort == "inizio" and "Inizio" in gdf.columns:
             by = ["Inizio"] + (["Cognome e Nome"] if "Cognome e Nome" in gdf.columns else [])
             gdf = gdf.sort_values(by=by).reset_index(drop=True)
         else:
             by = []
-            if "Cognome e Nome" in gdf.columns: by.append("Cognome e Nome")
-            if "Inizio" in gdf.columns:         by.append("Inizio")
+            if "Cognome e Nome" in gdf.columns:
+                by.append("Cognome e Nome")
+            if "Inizio" in gdf.columns:
+                by.append("Inizio")
             if by:
                 gdf = gdf.sort_values(by=by).reset_index(drop=True)
             gdf = _collapse_repeats(
-                gdf, key_cols=("Cognome e Nome", "Matricola"),
-                collapse_cols=("Cognome e Nome", "Matricola")
+                gdf,
+                key_cols=("Cognome e Nome", "Matricola"),
+                collapse_cols=("Cognome e Nome", "Matricola"),
             )
 
         trasferte = _trasferta_mask(gdf)
 
         if not first_block:
-            elems.append(Spacer(1, 3*mm))
+            elems.append(Spacer(1, 3 * mm))
         first_block = False
 
+        # Titolo gruppo (centrato)
         elems.append(Paragraph(res_name, group_style))
 
-        data   = _table_data_for(gdf, note_style)
+        # Tabella dati
+        data = _table_data_for(gdf, note_style)
         header = data[0]
-        col_idx   = {name: header.index(name) for name in ["Turno","Inizio","Fine"] if name in header}
+
+        # Indici colonne interessate (dinamici)
+        col_idx = {name: header.index(name) for name in ["Turno", "Inizio", "Fine"] if name in header}
         idx_inizio = col_idx.get("Inizio")
-        idx_fine   = col_idx.get("Fine")
+        idx_fine = col_idx.get("Fine")
 
         col_widths = _calc_col_widths(page_w)
         tbl = Table(data, repeatRows=1, colWidths=col_widths)
 
         base_style = [
-            ("GRID",       (0,0), (-1,-1), 0.25, colors.grey),
-            ("BACKGROUND", (0,0), (-1,0), colors.whitesmoke),
-            ("FONTNAME",   (0,0), (-1,0), "Helvetica-Bold"),
-            ("VALIGN",     (0,0), (-1,-1), "TOP"),
+            ("GRID",       (0, 0), (-1, -1), 0.25, colors.grey),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+            ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("VALIGN",     (0, 0), (-1, -1), "TOP"),
         ]
+        # Allineamento centro per Inizio/Fine
         if idx_inizio is not None:
-            base_style.append(("ALIGN", (idx_inizio,1), (idx_inizio,-1), "CENTER"))
+            base_style.append(("ALIGN", (idx_inizio, 1), (idx_inizio, -1), "CENTER"))
         if idx_fine is not None:
-            base_style.append(("ALIGN", (idx_fine,1), (idx_fine,-1), "CENTER"))
+            base_style.append(("ALIGN", (idx_fine, 1), (idx_fine, -1), "CENTER"))
 
-        for i, is_tr in enumerate(trasferte.tolist(), start=1):
+        # Grassetto per trasferte (solo Turno/Inizio/Fine)
+        for i, is_tr in enumerate(trasferte.tolist(), start=1):  # +1 per saltare header
             if not is_tr:
                 continue
             for cidx in col_idx.values():
@@ -307,19 +368,19 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
         tbl.setStyle(TableStyle(base_style))
         elems.append(tbl)
 
-    # Footer (solo ultima pagina)
+    # Footer (solo ultima pagina) — orario Europe/Rome
     if exported_at is None:
         exported_at = datetime.now(_TZ_ROMA)
     footer_text = exported_at.strftime("servizio esportato il %d/%m/%Y alle %H:%M")
 
     def _canvas_factory(*args, **kwargs):
-        # passa anche i margini così il canvas può calcolare la posizione
-        return _LastPageFooterCanvas(
+        # passiamo i margini per posizionare il footer
+        return _FooterCanvasV2(
             *args,
             exported_text=footer_text,
             right_margin=right,
             bottom_margin=bottom,
-            **kwargs
+            **kwargs,
         )
 
     doc.build(elems, canvasmaker=_canvas_factory)
