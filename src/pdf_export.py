@@ -141,7 +141,8 @@ def _header_table(title_para: Paragraph, logo_path: Path | None, page_w: float) 
 # ======================= Shaping tabella =======================
 def _collapse_repeats(gdf: pd.DataFrame,
                       key_cols=("Cognome e Nome", "Matricola"),
-                      collapse_cols=("Cognome e Nome", "Matricola")) -> pdDataFrame:
+                      collapse_cols=("Cognome e Nome", "Matricola")) -> pd.DataFrame:
+    """Sui record consecutivi della stessa persona azzera i campi ripetitivi."""
     missing = [c for c in key_cols if c not in gdf.columns]
     if missing:
         return gdf
@@ -153,6 +154,10 @@ def _collapse_repeats(gdf: pd.DataFrame,
     return g
 
 def _table_data_for(df: pd.DataFrame, para_style: ParagraphStyle):
+    """
+    Applica DISPLAY_ORDER, rimuove 'Residenza' e converte la colonna Note in Paragraph
+    per il word-wrapping. Sostituisce '*' con <br/> (a capo forzato).
+    """
     cols = [c for c in DISPLAY_ORDER if c in df.columns]
     dfp = df.copy()
     if cols:
@@ -166,19 +171,23 @@ def _table_data_for(df: pd.DataFrame, para_style: ParagraphStyle):
         idx_note = header.index("Indennità e note")
         for r in rows:
             txt = str(r[idx_note])
-            txt = escape(txt).replace("*", "<br/>")
+            txt = escape(txt).replace("*", "<br/>")  # escape prima, poi <br/> per '*'
             r[idx_note] = Paragraph(txt, para_style)
 
     return [header] + rows
 
 def _calc_col_widths(page_width: float) -> list[float]:
+    """
+    Calcola larghezze colonne (in punti) usando tutto lo spazio disponibile.
+    Ordine: Matricola, Cognome e Nome, Turno, Inizio, Fine, Indennità e note
+    """
     w_matricola = 24 * mm
     w_nome      = 60 * mm
     w_turno     = 22 * mm
     w_inizio    = 18 * mm
     w_fine      = 18 * mm
     used = w_matricola + w_nome + w_turno + w_inizio + w_fine
-    w_note = max(30 * mm, page_width - used)
+    w_note = max(30 * mm, page_width - used)  # il resto alla colonna Note (min 30mm)
     return [w_matricola, w_nome, w_turno, w_inizio, w_fine, w_note]
 
 # ======================= Story builder =======================
@@ -280,7 +289,6 @@ def _make_story(df: pd.DataFrame, meta: dict, logo_path: Path | None,
 class _FooterCanvas(rl_canvas.Canvas):
     """
     Canvas che disegna il footer SOLO sull'ultima pagina, senza introdurre pagine extra.
-    Nota: usiamo _startPage() in showPage() (NON super().showPage()) come da ricetta ReportLab.
     """
     def __init__(self, *args, footer_text: str = "", right_margin: float = 10*mm,
                  bottom_margin: float = 12*mm, **kwargs):
@@ -293,7 +301,7 @@ class _FooterCanvas(rl_canvas.Canvas):
     def showPage(self):
         # salva lo stato della pagina corrente e avvia la successiva SENZA scriverla subito
         self._saved_page_states.append(dict(self.__dict__))
-        self._startPage()  # <- fondamentale per NON creare una pagina extra
+        self._startPage()  # ← evita la pagina extra
 
     def save(self):
         # aggiungi anche l'ultima pagina
@@ -312,7 +320,7 @@ class _FooterCanvas(rl_canvas.Canvas):
                 self.drawString(x, y, self._footer_text)
                 self.restoreState()
 
-            rl_canvas.Canvas.showPage(self)  # scrivi la pagina
+            rl_canvas.Canvas.showPage(self)
         rl_canvas.Canvas.save(self)
 
 # ======================= Build PDF =======================
