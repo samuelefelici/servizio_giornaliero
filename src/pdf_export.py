@@ -101,7 +101,7 @@ def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
 # -------- header & footer helpers --------
 def _header_table(title_para: Paragraph, logo_path: Path | None, page_w: float) -> Table:
     """Riga con titolo (sx) e logo (dx) che occupa tutta la larghezza."""
-    max_logo_w, max_logo_h = 80*mm, 30*mm
+    max_logo_w, max_logo_h = 60*mm, 22.5*mm
     if logo_path and logo_path.exists():
         img = Image(str(logo_path))
         img._restrictSize(max_logo_w, max_logo_h)
