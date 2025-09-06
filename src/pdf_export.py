@@ -14,6 +14,12 @@ from .constants import DISPLAY_ORDER
 
 REST_CODES = {"R", "RR"}
 
+# Eccezioni GLOBALI: valgono per tutti i depositi
+GLOBAL_EXC_PATTERNS = (
+    r"^IAST$",   # esattamente IAST
+    r"^N$",      # esattamente N
+)
+
 EXC_ANCONA_PREFIXES = (
     "D1R1","D1R2","D1R5","D2R1","D2R2","D2R3","D2R6",
     "NP","ASC","V5",
