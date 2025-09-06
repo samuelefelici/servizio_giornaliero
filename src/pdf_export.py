@@ -156,7 +156,7 @@ def _header_table(title_para: Paragraph, logo_path: Path | None, page_w: float) 
     return tbl
 
 class _FooterCanvasV2(rl_canvas.Canvas):
-    """Disegna un testo in piccolo in basso a destra SOLO sull'ultima pagina."""
+    """Footer in basso a destra SOLO sull'ultima pagina (senza creare una pagina vuota)."""
     def __init__(self, *args, exported_text: str = "",
                  right_margin: float = 10*mm, bottom_margin: float = 12*mm, **kwargs):
         super().__init__(*args, **kwargs)
@@ -166,20 +166,20 @@ class _FooterCanvasV2(rl_canvas.Canvas):
         self._bottom_margin = bottom_margin
 
     def showPage(self):
-        # salva lo stato della pagina e passa alla successiva
+        # Salva lo stato della pagina corrente ma NON chiude la pagina reale.
         self._saved_page_states.append(dict(self.__dict__))
-        super().showPage()
+        self._startPage()  # evita la pagina vuota extra
 
     def save(self):
-        # include anche l'ultima pagina
+        # Aggiunge anche l'ultima pagina e riproduce tutte le pagine.
         self._saved_page_states.append(dict(self.__dict__))
         for i, state in enumerate(self._saved_page_states):
             self.__dict__.update(state)
+            # Footer solo sull'ULTIMA pagina
             if i == len(self._saved_page_states) - 1:
-                # footer SOLO sull'ultima pagina
                 self._draw_footer()
-            super().showPage()
-        super().save()
+            rl_canvas.Canvas.showPage(self)
+        rl_canvas.Canvas.save(self)
 
     def _draw_footer(self):
         self.saveState()
