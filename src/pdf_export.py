@@ -6,15 +6,13 @@ from reportlab.platypus import (
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.lib.units import mm
-from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from xml.sax.saxutils import escape
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
 import re
-from reportlab.lib.enums import TA_CENTER, TA_RIGHT
-from reportlab.pdfbase.pdfmetrics import stringWidth
-
 
 # TZ Europe/Rome
 try:
@@ -83,7 +81,7 @@ def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
 
 def _should_highlight_turno(residenza, turno) -> bool:
     """
-    Decide se evidenziare (grassetto) Turno/Inizio/Fine per la riga.
+    True se la riga è in ‘trasferta’ da evidenziare (grassetto su Turno/Inizio/Fine).
     """
     t = _norm_turno(turno)
     if not t or t in {"ASSENTE", *REST_CODES}:
@@ -159,7 +157,7 @@ def _header_table(title_para: Paragraph,
     right_col.setStyle(TableStyle([
         ("ALIGN",  (0,0), (0,0), "CENTER"),  # logo centrato
         ("ALIGN",  (0,1), (0,1), "RIGHT"),   # nota a destra
-        ("TOPPADDING",   (0,1), (0,1), 6),   # <-- più staccata dal logo (6pt)
+        ("TOPPADDING",   (0,1), (0,1), 6),   # più staccata dal logo
         ("LEFTPADDING",  (0,0), (-1,-1), 0),
         ("RIGHTPADDING", (0,0), (-1,-1), 0),
         ("BOTTOMPADDING",(0,0), (-1,-1), 0),
@@ -238,6 +236,7 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
     - Titolo a sinistra + logo a destra con nota in piccolo sotto il logo
     - Larghezza piena, Note che assorbe lo spazio residuo, wrapping con '*' -> newline.
     - Grassetto su Turno/Inizio/Fine per righe in trasferta (con eccezioni).
+    - Righe inserite (colonna '_added' True) in **grassetto su tutta la riga**.
     """
     # Margini/doc
     right = 10 * mm
@@ -288,7 +287,7 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
 
     elems: list = []
 
-    # Testo "esportato il ... alle ..." (Europe/Rome)
+    # Testo "esportato il ... alle ..." (Europe/Rome se non passato)
     if exported_at is None:
         exported_at = datetime.now(_TZ_ROMA)
     export_text = exported_at.strftime("servizio esportato il %d/%m/%Y alle %H:%M")
@@ -326,6 +325,7 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
             )
 
         trasferte = _trasferta_mask(gdf)
+        added_mask = gdf["_added"].fillna(False) if "_added" in gdf.columns else pd.Series(False, index=gdf.index)
 
         if not first_block:
             elems.append(Spacer(1, 3 * mm))
@@ -360,13 +360,17 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
 
         # Grassetto per trasferte (solo Turno/Inizio/Fine)
         for i, is_tr in enumerate(trasferte.tolist(), start=1):  # +1 per saltare header
-            if not is_tr:
-                continue
-            for cidx in col_idx.values():
-                base_style.append(("FONTNAME", (cidx, i), (cidx, i), "Helvetica-Bold"))
+            if is_tr:
+                for cidx in col_idx.values():
+                    base_style.append(("FONTNAME", (cidx, i), (cidx, i), "Helvetica-Bold"))
+
+        # Grassetto per righe aggiunte (tutta la riga)
+        for i, is_added in enumerate(added_mask.tolist(), start=1):  # +1 per header
+            if is_added:
+                base_style.append(("FONTNAME", (0, i), (-1, i), "Helvetica-Bold"))
 
         tbl.setStyle(TableStyle(base_style))
         elems.append(tbl)
 
-    # Build (niente canvas personalizzati, nessun foglio extra)
+    # Build
     doc.build(elems)
