@@ -70,7 +70,7 @@ st.title("📋 Servizio Giornaliero – ExtraUrbano (Python)")
 st.caption("Drag & drop del file Excel (.xls/.xlsx), pulizia automatica, anteprima e export PDF/Excel (raggruppato per deposito).")
 
 cfg_dir   = Path("config")
-assets_dir= Path("assest")
+assets_dir= Path("assest")   # nome cartella come richiesto
 logo_path = assets_dir / "logo.jpg"
 
 # ====================== Helper ======================
@@ -164,11 +164,62 @@ def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
         return pd.Series(False, index=df.index)
     return df.apply(lambda r: _should_highlight_turno(r.get("Residenza"), r.get("Turno")), axis=1)
 
-def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series) -> str:
+# ---------- NUOVO: supporto a trasferte inserite ----------
+_PREFIX_TO_RES = {
+    "JU": "JESI URBANO",
+    "J" : "JESI EXTRAURBANO",
+    "M" : "MARINA",
+    "C" : "CASTELFIDARDO",
+    "O" : "OSIMO",
+    "F" : "FILOTTRANO",
+    "P" : "POLVERIGI",
+    "D" : "OSTRA",
+    "B" : "BELVEDERE",
+    "A" : "ANCONA",
+}
+
+def _turno_to_residenza_name(turno: str) -> str | None:
+    """Dato un codice turno, decide in quale 'Residenza' inserirlo (bucket)."""
+    t = _norm_turno(turno)
+    if not t:
+        return None
+    if t.startswith("JU"):
+        return _PREFIX_TO_RES["JU"]
+    if t.startswith("J"):
+        return _PREFIX_TO_RES["J"]
+    return _PREFIX_TO_RES.get(t[0])
+
+def _parse_time_like(s: str | None) -> str:
+    s = (s or "").strip()
+    if not s:
+        return ""
+    m = re.match(r"^([01]?\d|2[0-3]):([0-5]\d)$", s)
+    return s if m else ""
+
+def _build_extra_df(rows: list[dict]) -> pd.DataFrame:
+    """Costruisce il DataFrame dalle righe manuali/importate e aggiunge flag _added."""
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows).rename(columns={
+        "Nominativo": "Cognome e Nome",
+        "Turno fuori residenza": "Turno",
+    })
+    for c in ["Matricola","Cognome e Nome","Turno","Inizio","Fine","Indennità e note","Residenza"]:
+        if c not in df.columns:
+            df[c] = ""
+    df["Residenza"] = df.apply(lambda r: r["Residenza"] or (_turno_to_residenza_name(r["Turno"]) or ""), axis=1)
+    df["Inizio"] = df["Inizio"].map(_parse_time_like)
+    df["Fine"]   = df["Fine"].map(_parse_time_like)
+    df["_added"] = True
+    keep = ["Matricola","Cognome e Nome","Turno","Inizio","Fine","Indennità e note","Residenza","_added"]
+    return df[keep]
+
+def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series, added_mask: pd.Series | None = None) -> str:
     """
     Ritorna HTML della tabella (pandas Styler) a larghezza piena.
-    Bold su Turno/Inizio/Fine quando trasferta_mask è True.
-    Nelle Note l'asterisco * forza un a capo.
+    - Bold su Turno/Inizio/Fine quando trasferta_mask è True.
+    - Righe aggiunte colorate in BLU.
+    - Nelle Note l'asterisco * forza un a capo.
     """
     df_html = g_disp.copy()
     note_col = "Indennità e note"
@@ -184,8 +235,15 @@ def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series) -> str:
     def _bold_if_trasferta(row):
         return (["font-weight: bold"] * len(row)) if trasferta_mask.loc[row.name] else ([""] * len(row))
 
+    if added_mask is None:
+        added_mask = pd.Series(False, index=df_html.index)
+
+    def _blue_if_added(row):
+        return (["color: #0b5ed7"] * len(row)) if added_mask.loc[row.name] else ([""] * len(row))
+
     sty = (df_html.style
            .hide(axis="index")
+           .apply(_blue_if_added, axis=1)  # colore blu righe aggiunte
            .apply(_bold_if_trasferta, axis=1, subset=subset_cols)
            .set_table_styles([
                {"selector": "table", "props": [("width","100%"), ("table-layout","fixed"), ("border-collapse","collapse")]},
@@ -201,6 +259,12 @@ def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series) -> str:
 
 
 # ====================== UI ======================
+
+# stato per trasferte aggiunte
+if "extra_rows" not in st.session_state:
+    st.session_state["extra_rows"] = pd.DataFrame(columns=[
+        "Matricola","Cognome e Nome","Turno","Inizio","Fine","Indennità e note","Residenza","_added"
+    ])
 
 uploaded = st.file_uploader("Trascina qui il file oppure selezionalo", type=["xls","xlsx"])
 
@@ -251,6 +315,72 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
             if hidden > 0:
                 st.info(f"Righe 'Assente' nascoste: {hidden}")
 
+        # --- Inserisci trasferte (manuale/import) ---
+        st.divider()
+        with st.expander("➕ Inserisci trasferte", expanded=False):
+            mode = st.radio("Modalità", ["Manualmente", "Importa"], horizontal=True)
+            if mode == "Manualmente":
+                with st.form("trasferte_manual"):
+                    nrows = st.number_input("Quante righe vuoi inserire?", min_value=1, max_value=30, value=1, step=1)
+                    manual_rows = []
+                    for i in range(int(nrows)):
+                        st.markdown(f"**Riga {i+1}**")
+                        c1, c2, c3, c4, c5 = st.columns([1,2,1,1,1])
+                        matricola = c1.text_input("Matricola*", key=f"mat_{i}")
+                        nome      = c2.text_input("Cognome e Nome*", key=f"nom_{i}")
+                        turno     = c3.text_input("Turno*", key=f"tur_{i}")
+                        inizio    = c4.text_input("Inizio (HH:MM)", key=f"ini_{i}", placeholder="es. 06:30")
+                        fine      = c5.text_input("Fine (HH:MM)",   key=f"fin_{i}", placeholder="es. 13:10")
+                        if matricola or nome or turno or inizio or fine:
+                            manual_rows.append({
+                                "Matricola": str(matricola).strip(),
+                                "Cognome e Nome": nome.strip(),
+                                "Turno": turno.strip(),
+                                "Inizio": inizio.strip(),
+                                "Fine":   fine.strip(),
+                                "Indennità e note": "",
+                                "Residenza": _turno_to_residenza_name(turno.strip()) or "",
+                            })
+                    ok = st.form_submit_button("Conferma inserimento")
+                    if ok:
+                        errs = [r for r in manual_rows if not (r["Matricola"] and r["Cognome e Nome"] and r["Turno"])]
+                        if errs:
+                            st.error("Compila Matricola, Cognome e Nome e Turno per tutte le righe non vuote.")
+                        else:
+                            extra_df = _build_extra_df(manual_rows)
+                            st.session_state["extra_rows"] = pd.concat(
+                                [st.session_state["extra_rows"], extra_df], ignore_index=True
+                            )
+                            st.success(f"Inserite {len(extra_df)} trasferte.")
+            else:
+                up_transfer = st.file_uploader("Carica file trasferte (.xls/.xlsx)", type=["xls","xlsx"], key="upl_trs")
+                if up_transfer is not None:
+                    try:
+                        raw = pd.read_excel(up_transfer)
+                        renamed = raw.rename(columns={
+                            "Matricola": "Matricola",
+                            "Nominativo": "Cognome e Nome",
+                            "Turno fuori residenza": "Turno",
+                        })
+                        rows = renamed.to_dict("records")
+                        extra_df = _build_extra_df(rows)
+                        st.session_state["extra_rows"] = pd.concat(
+                            [st.session_state["extra_rows"], extra_df], ignore_index=True
+                        )
+                        st.success(f"Importate {len(extra_df)} trasferte.")
+                    except Exception as e:
+                        st.error(f"Errore in import: {e}")
+
+            if not st.session_state["extra_rows"].empty:
+                if st.button("🗑️ Svuota trasferte aggiunte"):
+                    st.session_state["extra_rows"] = st.session_state["extra_rows"].iloc[0:0]
+                    st.info("Trasferte cancellate.")
+        st.divider()
+
+        # Aggiungi eventuali trasferte inserite/importate
+        if not st.session_state["extra_rows"].empty:
+            df_view = pd.concat([df_view, st.session_state["extra_rows"]], ignore_index=True)
+
         # Feedback meta
         st.success(f"File elaborato. Data: {meta.get('data','?')} – {meta.get('giorno','?')} "
                    f"(fonte: {meta.get('origine','?')})")
@@ -298,14 +428,16 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
 
                 g_disp = _reorder_for_display(g)
                 mask   = _trasferta_mask(g)     # calcolata sull’indice originale
-                html   = _styled_html_table(g_disp, mask)
+                added_mask = g["_added"].fillna(False) if "_added" in g.columns else pd.Series(False, index=g.index)
+                html   = _styled_html_table(g_disp, mask, added_mask)
                 st.markdown(html, unsafe_allow_html=True)
 
         else:
             st.markdown("### **TUTTI**")
             g_disp = _reorder_for_display(df_view)
             mask   = _trasferta_mask(df_view)
-            html   = _styled_html_table(g_disp, mask)
+            added_mask = df_view["_added"].fillna(False) if "_added" in df_view.columns else pd.Series(False, index=df_view.index)
+            html   = _styled_html_table(g_disp, mask, added_mask)
             st.markdown(html, unsafe_allow_html=True)
 
         # --- Export Excel ---
