@@ -48,7 +48,7 @@ except Exception as e:
 # --- Config pagina ---
 st.set_page_config(page_title="Servizio Giornaliero", layout="wide")
 
-# CSS: contenitore a tutta larghezza e stile tabelle HTML (pandas Styler)
+# CSS
 st.markdown("""
 <style>
 .block-container {max-width: 100% !important; padding-left: 16px; padding-right: 16px;}
@@ -56,10 +56,8 @@ st.markdown("""
 .serv-table-wrap table {width: 100% !important; table-layout: fixed; border-collapse: collapse;}
 .serv-table-wrap th {background:#f5f5f5; text-align:left; padding:6px;}
 .serv-table-wrap td {padding:6px; vertical-align: top;}
-/* centro le colonne 4 e 5 (Inizio/Fine) */
 .serv-table-wrap th:nth-child(4), .serv-table-wrap td:nth-child(4),
 .serv-table-wrap th:nth-child(5), .serv-table-wrap td:nth-child(5) {text-align:center;}
-/* colonna Note: usa il resto della larghezza e va a capo */
 .serv-table-wrap th:nth-child(6), .serv-table-wrap td:nth-child(6) {
   width: 40%; white-space: normal; word-break: break-word;
 }
@@ -72,6 +70,15 @@ st.caption("Drag & drop del file Excel (.xls/.xlsx), pulizia automatica, antepri
 cfg_dir   = Path("config")
 assets_dir= Path("assest")   # nome cartella come richiesto
 logo_path = assets_dir / "logo.jpg"
+
+# ====================== Session state ======================
+st.session_state.setdefault("df_view", None)
+st.session_state.setdefault("meta", None)
+st.session_state.setdefault("last_inner_sort", "nome")
+st.session_state.setdefault("show_transfer_ui", False)
+st.session_state.setdefault("extra_rows", pd.DataFrame(columns=[
+    "Matricola","Cognome e Nome","Turno","Inizio","Fine","Indennità e note","Residenza","_added"
+]))
 
 # ====================== Helper ======================
 
@@ -107,10 +114,7 @@ def _match_any(token: str, patterns: tuple[str, ...]) -> bool:
     return any(re.match(p, t) for p in patterns)
 
 def _turno_bucket(turno: str) -> str | None:
-    """
-    Bucket turno: 'JU' se parte con JU, altrimenti 'J' se parte con J,
-    altrimenti prima lettera; esclude Assente/R/RR.
-    """
+    """Bucket turno: 'JU' se parte con JU, altrimenti 'J' se parte con J, altrimenti prima lettera; esclude Assente/R/RR."""
     t = _norm_turno(turno)
     if not t or t in {"ASSENTE", *REST_CODES}:
         return None
@@ -128,21 +132,14 @@ def _should_highlight_turno(residenza, turno) -> bool:
     t = _norm_turno(turno)
     if not t or t in {"ASSENTE", *REST_CODES}:
         return False
-
     # Eccezioni GLOBALI (match esatto)
     if _match_any(t, GLOBAL_EXC_PATTERNS):
         return False
-
     rp = _res_to_prefix(residenza)
-
     # Eccezioni specifiche per deposito
     if rp == "A":  # ANCONA
         if _match_any(t, EXC_ANCONA_PATTERNS):
             return False
-    else:
-        # niente: IAST/N già catturati come GLOBAL (evitiamo di escludere NP ecc.)
-        pass
-
     # Regola standard J/JU equivalenti, altrimenti prima lettera
     if t.startswith("JU"):
         b = "JU"
@@ -150,21 +147,17 @@ def _should_highlight_turno(residenza, turno) -> bool:
         b = "J"
     else:
         b = t[0] if t else None
-
     if not rp or not b:
         return False
     return b not in _accepted_prefixes_for_res(rp)
 
 def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
-    """
-    True se il turno è ‘fuori deposito’ (J/JU equivalenti; R/RR/Assente esclusi)
-    e NON cade nelle liste di eccezione definite.
-    """
+    """True se il turno è ‘fuori deposito’ (J/JU equivalenti; R/RR/Assente esclusi) e non cade nelle eccezioni."""
     if "Residenza" not in df.columns or "Turno" not in df.columns:
         return pd.Series(False, index=df.index)
     return df.apply(lambda r: _should_highlight_turno(r.get("Residenza"), r.get("Turno")), axis=1)
 
-# ---------- NUOVO: supporto a trasferte inserite ----------
+# ---------- supporto a trasferte inserite ----------
 _PREFIX_TO_RES = {
     "JU": "JESI URBANO",
     "J" : "JESI EXTRAURBANO",
@@ -215,56 +208,85 @@ def _build_extra_df(rows: list[dict]) -> pd.DataFrame:
     return df[keep]
 
 def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series, added_mask: pd.Series | None = None) -> str:
-    """
-    Ritorna HTML della tabella (pandas Styler) a larghezza piena.
-    - Bold su Turno/Inizio/Fine quando trasferta_mask è True.
-    - Righe aggiunte colorate in BLU.
-    - Nelle Note l'asterisco * forza un a capo.
-    """
+    """Ritorna HTML tabella con: righe _added blu; T/I/F in grassetto per trasferte; '*' -> a capo in Note."""
     df_html = g_disp.copy()
     note_col = "Indennità e note"
     if note_col in df_html.columns:
-        df_html[note_col] = (
-            df_html[note_col]
-            .astype(str)
-            .apply(lambda x: html_escape(x).replace("*", "<br/>"))
-        )
-
+        df_html[note_col] = df_html[note_col].astype(str).apply(lambda x: html_escape(x).replace("*", "<br/>"))
     subset_cols = [c for c in ["Turno", "Inizio", "Fine"] if c in df_html.columns]
+    if added_mask is None:
+        added_mask = pd.Series(False, index=df_html.index)
 
     def _bold_if_trasferta(row):
         return (["font-weight: bold"] * len(row)) if trasferta_mask.loc[row.name] else ([""] * len(row))
 
-    if added_mask is None:
-        added_mask = pd.Series(False, index=df_html.index)
-
     def _blue_if_added(row):
-        return (["color: #0b5ed7"] * len(row)) if added_mask.loc[row.name] else ([""] * len(row))
+        return (["color:#0b5ed7"] * len(row)) if added_mask.loc[row.name] else ([""] * len(row))
 
     sty = (df_html.style
            .hide(axis="index")
-           .apply(_blue_if_added, axis=1)  # colore blu righe aggiunte
-           .apply(_bold_if_trasferta, axis=1, subset=subset_cols)
+           .apply(_blue_if_added, axis=1)                         # colore blu per righe aggiunte
+           .apply(_bold_if_trasferta, axis=1, subset=subset_cols) # grassetto T/I/F per trasferte
            .set_table_styles([
                {"selector": "table", "props": [("width","100%"), ("table-layout","fixed"), ("border-collapse","collapse")]},
                {"selector": "th",    "props": [("background","#f5f5f5"), ("text-align","left"), ("padding","6px")]},
                {"selector": "td",    "props": [("padding","6px"), ("vertical-align","top")]},
-               {"selector": "th:nth-child(4), td:nth-child(4), th:nth-child(5), td:nth-child(5)",
-                "props": [("text-align","center")]},
-               {"selector": "th:nth-child(6), td:nth-child(6)",
-                "props": [("width","40%"), ("white-space","normal"), ("word-break","break-word")]}
+               {"selector": "th:nth-child(4), td:nth-child(4), th:nth-child(5), td:nth-child(5)", "props": [("text-align","center")]},
+               {"selector": "th:nth-child(6), td:nth-child(6)", "props": [("width","40%"), ("white-space","normal"), ("word-break","break-word")]}
            ], overwrite=False)
           )
     return f'<div class="serv-table-wrap">{sty.to_html(escape=False)}</div>'
 
+def render_preview(df_view: pd.DataFrame, meta: dict, inner_sort_choice: str):
+    st.success(f"File elaborato. Data: {meta.get('data','?')} – {meta.get('giorno','?')} (fonte: {meta.get('origine','?')})")
+    st.markdown(
+        f"""
+        <h2 style="color:#d00; font-weight:800; margin: 0.5rem 0 0.5rem 0; text-align:center;">
+          Servizio Giornaliero: {meta.get('giorno','')} {meta.get('data','')}
+        </h2>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.subheader("Anteprima per deposito")
+
+    if "Residenza" in df_view.columns:
+        res_list = sorted(df_view["Residenza"].dropna().astype(str).unique())
+        for res in res_list:
+            g = df_view[df_view["Residenza"].astype(str) == res].copy()
+            if g.empty:
+                continue
+
+            # Ordinamento interno
+            if inner_sort_choice.startswith("Inizio") and "Inizio" in g.columns:
+                by = ["Inizio"] + (["Cognome e Nome"] if "Cognome e Nome" in g.columns else [])
+                g = g.sort_values(by=by).reset_index(drop=True)
+            else:
+                by = []
+                if "Cognome e Nome" in g.columns: by.append("Cognome e Nome")
+                if "Inizio" in g.columns:         by.append("Inizio")
+                if by:
+                    g = g.sort_values(by=by).reset_index(drop=True)
+                if {"Cognome e Nome", "Matricola"}.issubset(g.columns):
+                    same_person = g[["Cognome e Nome", "Matricola"]].eq(
+                        g[["Cognome e Nome", "Matricola"]].shift(1)
+                    ).all(axis=1)
+                    g.loc[same_person, ["Cognome e Nome", "Matricola"]] = ""
+
+            st.markdown(f"<h3 style='text-align:center; margin: 0.5rem 0 0.25rem 0;'>{res}</h3>", unsafe_allow_html=True)
+            g_disp = _reorder_for_display(g)
+            mask   = _trasferta_mask(g)
+            added_mask = g["_added"].fillna(False) if "_added" in g.columns else pd.Series(False, index=g.index)
+            html   = _styled_html_table(g_disp, mask, added_mask)
+            st.markdown(html, unsafe_allow_html=True)
+    else:
+        st.markdown("### **TUTTI**")
+        g_disp = _reorder_for_display(df_view)
+        mask   = _trasferta_mask(df_view)
+        added_mask = df_view["_added"].fillna(False) if "_added" in df_view.columns else pd.Series(False, index=df_view.index)
+        html   = _styled_html_table(g_disp, mask, added_mask)
+        st.markdown(html, unsafe_allow_html=True)
 
 # ====================== UI ======================
-
-# stato per trasferte aggiunte
-if "extra_rows" not in st.session_state:
-    st.session_state["extra_rows"] = pd.DataFrame(columns=[
-        "Matricola","Cognome e Nome","Turno","Inizio","Fine","Indennità e note","Residenza","_added"
-    ])
 
 uploaded = st.file_uploader("Trascina qui il file oppure selezionalo", type=["xls","xlsx"])
 
@@ -315,159 +337,124 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
             if hidden > 0:
                 st.info(f"Righe 'Assente' nascoste: {hidden}")
 
-        # --- Inserisci trasferte (manuale/import) ---
-        st.divider()
-        with st.expander("➕ Inserisci trasferte", expanded=False):
-            mode = st.radio("Modalità", ["Manualmente", "Importa"], horizontal=True)
-            if mode == "Manualmente":
-                with st.form("trasferte_manual"):
-                    nrows = st.number_input("Quante righe vuoi inserire?", min_value=1, max_value=30, value=1, step=1)
-                    manual_rows = []
-                    for i in range(int(nrows)):
-                        st.markdown(f"**Riga {i+1}**")
-                        c1, c2, c3, c4, c5 = st.columns([1,2,1,1,1])
-                        matricola = c1.text_input("Matricola*", key=f"mat_{i}")
-                        nome      = c2.text_input("Cognome e Nome*", key=f"nom_{i}")
-                        turno     = c3.text_input("Turno*", key=f"tur_{i}")
-                        inizio    = c4.text_input("Inizio (HH:MM)", key=f"ini_{i}", placeholder="es. 06:30")
-                        fine      = c5.text_input("Fine (HH:MM)",   key=f"fin_{i}", placeholder="es. 13:10")
-                        if matricola or nome or turno or inizio or fine:
-                            manual_rows.append({
-                                "Matricola": str(matricola).strip(),
-                                "Cognome e Nome": nome.strip(),
-                                "Turno": turno.strip(),
-                                "Inizio": inizio.strip(),
-                                "Fine":   fine.strip(),
-                                "Indennità e note": "",
-                                "Residenza": _turno_to_residenza_name(turno.strip()) or "",
-                            })
-                    ok = st.form_submit_button("Conferma inserimento")
-                    if ok:
-                        errs = [r for r in manual_rows if not (r["Matricola"] and r["Cognome e Nome"] and r["Turno"])]
-                        if errs:
-                            st.error("Compila Matricola, Cognome e Nome e Turno per tutte le righe non vuote.")
-                        else:
-                            extra_df = _build_extra_df(manual_rows)
-                            st.session_state["extra_rows"] = pd.concat(
-                                [st.session_state["extra_rows"], extra_df], ignore_index=True
-                            )
-                            st.success(f"Inserite {len(extra_df)} trasferte.")
-            else:
-                up_transfer = st.file_uploader("Carica file trasferte (.xls/.xlsx)", type=["xls","xlsx"], key="upl_trs")
-                if up_transfer is not None:
-                    try:
-                        raw = pd.read_excel(up_transfer)
-                        renamed = raw.rename(columns={
-                            "Matricola": "Matricola",
-                            "Nominativo": "Cognome e Nome",
-                            "Turno fuori residenza": "Turno",
-                        })
-                        rows = renamed.to_dict("records")
-                        extra_df = _build_extra_df(rows)
-                        st.session_state["extra_rows"] = pd.concat(
-                            [st.session_state["extra_rows"], extra_df], ignore_index=True
-                        )
-                        st.success(f"Importate {len(extra_df)} trasferte.")
-                    except Exception as e:
-                        st.error(f"Errore in import: {e}")
-
-            if not st.session_state["extra_rows"].empty:
-                if st.button("🗑️ Svuota trasferte aggiunte"):
-                    st.session_state["extra_rows"] = st.session_state["extra_rows"].iloc[0:0]
-                    st.info("Trasferte cancellate.")
-        st.divider()
-
-        # Aggiungi eventuali trasferte inserite/importate
+        # Aggiungi eventuali trasferte già in sessione
         if not st.session_state["extra_rows"].empty:
             df_view = pd.concat([df_view, st.session_state["extra_rows"]], ignore_index=True)
 
-        # Feedback meta
-        st.success(f"File elaborato. Data: {meta.get('data','?')} – {meta.get('giorno','?')} "
-                   f"(fonte: {meta.get('origine','?')})")
-        # Titolo rosso dinamico (anteprima)
-        st.markdown(
-            f"""
-            <h2 style="color:#d00; font-weight:800; margin: 0.5rem 0 0.5rem 0; text-align:center;">
-              Servizio Giornaliero: {meta.get('giorno','')} {meta.get('data','')}
-            </h2>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.subheader("Anteprima per deposito")
+        # Salva in sessione e mostra preview
+        st.session_state["df_view"] = df_view
+        st.session_state["meta"] = meta
+        st.session_state["last_inner_sort"] = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
 
-        # Anteprima per deposito con grassetto per trasferte
-        if "Residenza" in df_view.columns:
-            res_list = sorted(df_view["Residenza"].dropna().astype(str).unique())
-            for res in res_list:
-                g = df_view[df_view["Residenza"].astype(str) == res].copy()
-                if g.empty:
-                    continue
-
-                # Ordinamento interno
-                if inner_sort_choice.startswith("Inizio") and "Inizio" in g.columns:
-                    by = ["Inizio"]
-                    if "Cognome e Nome" in g.columns: by.append("Cognome e Nome")
-                    g = g.sort_values(by=by).reset_index(drop=True)
-                else:
-                    by = []
-                    if "Cognome e Nome" in g.columns: by.append("Cognome e Nome")
-                    if "Inizio" in g.columns:         by.append("Inizio")
-                    if by:
-                        g = g.sort_values(by=by).reset_index(drop=True)
-                    # compattazione Nome/Matricola ripetuti consecutivi
-                    if {"Cognome e Nome", "Matricola"}.issubset(g.columns):
-                        same_person = g[["Cognome e Nome", "Matricola"]].eq(
-                            g[["Cognome e Nome", "Matricola"]].shift(1)
-                        ).all(axis=1)
-                        g.loc[same_person, ["Cognome e Nome", "Matricola"]] = ""
-
-                st.markdown(
-                    f"<h3 style='text-align:center; margin: 0.5rem 0 0.25rem 0;'>{res}</h3>",
-                    unsafe_allow_html=True,
-                )
-
-                g_disp = _reorder_for_display(g)
-                mask   = _trasferta_mask(g)     # calcolata sull’indice originale
-                added_mask = g["_added"].fillna(False) if "_added" in g.columns else pd.Series(False, index=g.index)
-                html   = _styled_html_table(g_disp, mask, added_mask)
-                st.markdown(html, unsafe_allow_html=True)
-
-        else:
-            st.markdown("### **TUTTI**")
-            g_disp = _reorder_for_display(df_view)
-            mask   = _trasferta_mask(df_view)
-            added_mask = df_view["_added"].fillna(False) if "_added" in df_view.columns else pd.Series(False, index=df_view.index)
-            html   = _styled_html_table(g_disp, mask, added_mask)
-            st.markdown(html, unsafe_allow_html=True)
-
-        # --- Export Excel ---
-        xls_buf = io.BytesIO()
-        with pd.ExcelWriter(xls_buf, engine="openpyxl") as writer:
-            _reorder_for_display(df_view).to_excel(writer, sheet_name="ServizioGiornaliero", index=False)
-        st.download_button(
-            "⬇️ Scarica Excel",
-            data=xls_buf.getvalue(),
-            file_name="ServizioGiornaliero.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-        # --- Export PDF ---
-        with tempfile.TemporaryDirectory() as td:
-            pdf_path   = Path(td) / "ServizioGiornaliero.pdf"
-            inner_sort = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
-            build_pdf(pdf_path, df_view, meta,
-                      logo_path if logo_path.exists() else None,
-                      title=TITLE, inner_sort=inner_sort,
-                      exported_at=datetime.now()
-                     )
-            st.download_button(
-                "⬇️ Scarica PDF",
-                data=pdf_path.read_bytes(),
-                file_name="ServizioGiornaliero.pdf",
-                mime="application/pdf"
-            )
+        render_preview(st.session_state["df_view"], st.session_state["meta"], inner_sort_choice)
 
     except Exception as e:
         import traceback
         st.error(f"Errore durante l'elaborazione: {e}")
         st.code("".join(traceback.format_exception(*sys.exc_info())))
+
+# ====================== Preview persistente + Trasferte + Export ======================
+
+if st.session_state["df_view"] is not None and st.session_state["meta"] is not None:
+    # bottone che apre/chiude UI trasferte
+    c1, c2 = st.columns([1,3])
+    with c1:
+        if st.button("➕ Inserisci trasferte", use_container_width=True):
+            st.session_state["show_transfer_ui"] = not st.session_state["show_transfer_ui"]
+
+    # UI trasferte (fuori dal blocco 'Elabora' per non perdere la preview)
+    if st.session_state["show_transfer_ui"]:
+        st.markdown("### Inserisci trasferte")
+        mode = st.radio("Modalità", ["Manualmente", "Importa"], horizontal=True)
+
+        if mode == "Manualmente":
+            st.caption("Compila le righe (max 30). Obbligatori: Matricola, Cognome e Nome, Turno.")
+            # tabella editabile
+            start_rows = 5
+            default_rows = pd.DataFrame([{"Matricola":"","Cognome e Nome":"","Turno":"","Inizio":"","Fine":""} for _ in range(start_rows)])
+            grid = st.data_editor(default_rows, num_rows="dynamic", use_container_width=True, key="manual_grid")
+            if st.button("✅ Conferma trasferte"):
+                rows = grid.replace({pd.NA:"", None:""}).to_dict("records")
+                # filtra righe completamente vuote
+                rows = [r for r in rows if any(str(v).strip() for v in r.values())]
+                if len(rows) > 30:
+                    rows = rows[:30]
+                    st.info("Sono state prese solo le prime 30 righe.")
+                # validazione minimi
+                bad = [r for r in rows if not (str(r.get("Matricola")).strip() and str(r.get("Cognome e Nome")).strip() and str(r.get("Turno")).strip())]
+                if bad:
+                    st.error("Compila Matricola, Cognome e Nome e Turno per ogni riga non vuota.")
+                else:
+                    extra_df = _build_extra_df(rows)
+                    st.session_state["extra_rows"] = pd.concat([st.session_state["extra_rows"], extra_df], ignore_index=True)
+                    # aggiorna df_view e chiudi UI
+                    st.session_state["df_view"] = pd.concat([st.session_state["df_view"], extra_df], ignore_index=True)
+                    st.session_state["show_transfer_ui"] = False
+                    st.success(f"Inserite {len(extra_df)} trasferte.")
+                    # render immediato
+                    render_preview(st.session_state["df_view"], st.session_state["meta"], inner_sort_choice)
+
+        else:  # Importa
+            up = st.file_uploader("Carica XLS/XLSX con colonne: Matricola, Nominativo, Turno fuori residenza", type=["xls","xlsx"], key="imp_upl")
+            if up is not None:
+                try:
+                    imp = pd.read_excel(up)
+                    imp = imp.rename(columns={"Nominativo":"Cognome e Nome","Turno fuori residenza":"Turno"})
+                    keep = ["Matricola","Cognome e Nome","Turno"]
+                    imp = imp[[c for c in keep if c in imp.columns]].copy()
+                    imp["Inizio"] = ""
+                    imp["Fine"]   = ""
+                    rows = imp.to_dict("records")
+                    if st.button("✅ Importa e conferma"):
+                        extra_df = _build_extra_df(rows)
+                        st.session_state["extra_rows"] = pd.concat([st.session_state["extra_rows"], extra_df], ignore_index=True)
+                        st.session_state["df_view"] = pd.concat([st.session_state["df_view"], extra_df], ignore_index=True)
+                        st.session_state["show_transfer_ui"] = False
+                        st.success(f"Importate {len(extra_df)} trasferte.")
+                        render_preview(st.session_state["df_view"], st.session_state["meta"], inner_sort_choice)
+                except Exception as e:
+                    st.error(f"Errore nel file import: {e}")
+
+        # pulsante per svuotare eventuali trasferte in sessione
+        if not st.session_state["extra_rows"].empty:
+            if st.button("🗑️ Svuota trasferte aggiunte"):
+                st.session_state["extra_rows"] = st.session_state["extra_rows"].iloc[0:0]
+                # ricalcola df_view rimuovendo le _added
+                base = st.session_state["df_view"]
+                if "_added" in base.columns:
+                    base = base[~base["_added"].fillna(False)].copy()
+                st.session_state["df_view"] = base
+                st.info("Trasferte cancellate.")
+                render_preview(st.session_state["df_view"], st.session_state["meta"], inner_sort_choice)
+
+    # Se non sto aprendo la UI trasferte, mostra la preview persistente
+    if not st.session_state["show_transfer_ui"]:
+        render_preview(st.session_state["df_view"], st.session_state["meta"], inner_sort_choice)
+
+    # --- Export Excel ---
+    xls_buf = io.BytesIO()
+    with pd.ExcelWriter(xls_buf, engine="openpyxl") as writer:
+        _reorder_for_display(st.session_state["df_view"]).to_excel(writer, sheet_name="ServizioGiornaliero", index=False)
+    st.download_button(
+        "⬇️ Scarica Excel",
+        data=xls_buf.getvalue(),
+        file_name="ServizioGiornaliero.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+    # --- Export PDF ---
+    with tempfile.TemporaryDirectory() as td:
+        pdf_path   = Path(td) / "ServizioGiornaliero.pdf"
+        inner_sort = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
+        build_pdf(pdf_path,
+                  st.session_state["df_view"],
+                  st.session_state["meta"],
+                  logo_path if logo_path.exists() else None,
+                  title=TITLE, inner_sort=inner_sort,
+                  exported_at=datetime.now())
+        st.download_button(
+            "⬇️ Scarica PDF",
+            data=pdf_path.read_bytes(),
+            file_name="ServizioGiornaliero.pdf",
+            mime="application/pdf"
+        )
