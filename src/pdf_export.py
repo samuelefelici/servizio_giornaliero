@@ -180,16 +180,20 @@ def _header_table(title_para: Paragraph,
 def _collapse_repeats(gdf: pd.DataFrame,
                       key_cols=("Cognome e Nome", "Matricola"),
                       collapse_cols=("Cognome e Nome", "Matricola")) -> pd.DataFrame:
-    """Sui record consecutivi della stessa persona azzera i campi ripetitivi."""
+    """Sui record consecutivi della stessa persona azzera i campi ripetitivi,
+    ma sotto il Nome mostra il simbolo ↳ per indicare un secondo turno."""
     missing = [c for c in key_cols if c not in gdf.columns]
     if missing:
         return gdf
     g = gdf.copy()
     dup_mask = (g[list(key_cols)] == g[list(key_cols)].shift(1)).all(axis=1)
-    for c in collapse_cols:
-        if c in g.columns:
-            g.loc[dup_mask, c] = ""
+    # Matricola vuota, Nome con simbolo
+    if "Matricola" in g.columns:
+        g.loc[dup_mask, "Matricola"] = ""
+    if "Cognome e Nome" in g.columns:
+        g.loc[dup_mask, "Cognome e Nome"] = "↳"
     return g
+
 
 def _table_data_for(df: pd.DataFrame, para_style: ParagraphStyle):
     """
