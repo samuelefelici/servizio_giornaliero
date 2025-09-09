@@ -52,7 +52,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📋 Servizio Giornaliero – ExtraUrbano (Python)")
+st.title("📋 Servizio Giornaliero")
 st.caption("Drag & drop del file Excel (.xls/.xlsx), pulizia automatica, anteprima e export PDF/Excel (raggruppato per deposito).")
 
 cfg_dir   = Path("config")
