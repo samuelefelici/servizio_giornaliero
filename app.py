@@ -246,14 +246,6 @@ def _do_rerun():
     else:
         st.experimental_rerun()
 
-# --- helper per sniffare il formato del file excel ---
-def _sniff_xlsx(fileobj) -> bool:
-    """Ritorna True se il contenuto è zip (tipico degli .xlsx). Non consuma lo stream."""
-    pos = fileobj.tell()
-    head = fileobj.read(4)
-    fileobj.seek(pos)
-    return head == b"PK\x03\x04"  # magic ZIP
-
 # ====================== UI ======================
 
 uploaded = st.file_uploader("Trascina qui il file oppure selezionalo", type=["xls","xlsx"])
@@ -327,106 +319,44 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
 
     if st.session_state["show_transfer_ui"]:
         st.markdown("### Inserisci trasferte")
-        mode = st.radio("Modalità", ["Manualmente", "Importa"], horizontal=True)
+        st.caption("Compila le righe (max 30). Obbligatori: Matricola, Cognome e Nome, Turno.")
 
-        if mode == "Manualmente":
-            st.caption("Compila le righe (max 30). Obbligatori: Matricola, Cognome e Nome, Turno.")
-            start_rows = 5
-            default_rows = pd.DataFrame([{"Matricola":"","Cognome e Nome":"","Turno":"","Inizio":"","Fine":""} for _ in range(start_rows)])
-            grid = st.data_editor(default_rows, num_rows="dynamic", use_container_width=True, key="manual_grid")
-            if st.button("✅ Conferma trasferte"):
+        start_rows = 5
+        default_rows = pd.DataFrame(
+            [{"Matricola":"","Cognome e Nome":"","Turno":"","Inizio":"","Fine":""} for _ in range(start_rows)]
+        )
+        grid = st.data_editor(
+            default_rows, num_rows="dynamic", use_container_width=True, key="manual_grid"
+        )
+
+        col_btn1, col_btn2 = st.columns([1,1])
+        with col_btn1:
+            if st.button("✅ Conferma trasferte", use_container_width=True):
                 rows = grid.replace({pd.NA:"", None:""}).to_dict("records")
                 rows = [r for r in rows if any(str(v).strip() for v in r.values())]
                 if len(rows) > 30:
                     rows = rows[:30]
                     st.info("Sono state prese solo le prime 30 righe.")
-                bad = [r for r in rows if not (str(r.get("Matricola")).strip() and str(r.get("Cognome e Nome")).strip() and str(r.get("Turno")).strip())]
+                bad = [r for r in rows if not (str(r.get("Matricola")).strip()
+                                               and str(r.get("Cognome e Nome")).strip()
+                                               and str(r.get("Turno")).strip())]
                 if bad:
                     st.error("Compila Matricola, Cognome e Nome e Turno per ogni riga non vuota.")
                 else:
                     extra_df = _build_extra_df(rows)
-                    st.session_state["extra_rows"] = pd.concat([st.session_state["extra_rows"], extra_df], ignore_index=True)
-                    st.session_state["df_view"] = pd.concat([st.session_state["df_view"], extra_df], ignore_index=True)
+                    st.session_state["extra_rows"] = pd.concat(
+                        [st.session_state["extra_rows"], extra_df], ignore_index=True
+                    )
+                    st.session_state["df_view"] = pd.concat(
+                        [st.session_state["df_view"], extra_df], ignore_index=True
+                    )
                     st.session_state["show_transfer_ui"] = False
                     st.success(f"Inserite {len(extra_df)} trasferte.")
                     _do_rerun()
 
-        else:  # Importa
-            up = st.file_uploader(
-                "Carica XLS/XLSX con colonne: Matricola, Nominativo, Turno fuori residenza",
-                type=["xls", "xlsx"],
-                key="imp_upl"
-            )
-            if up is not None:
-                try:
-                    # scegli engine in base a contenuto + estensione
-                    up.seek(0)
-                    is_xlsx_zip = _sniff_xlsx(up)
-                    ext = Path(up.name).suffix.lower()
-
-                    up.seek(0)
-                    if is_xlsx_zip or ext == ".xlsx":
-                        imp = pd.read_excel(up, engine="openpyxl")
-                    else:
-                        # .xls (BIFF) -> xlrd 1.2.0
-                        imp = pd.read_excel(up, engine="xlrd")
-
-                    # normalizza header (spazi, maiuscole/minuscole)
-                    imp.columns = [str(c).strip().lower() for c in imp.columns]
-
-                    # mappa colonne attese -> nostre colonne
-                    col_map = {}
-                    if "matricola" in imp.columns:
-                        col_map["matricola"] = "Matricola"
-                    if "nominativo" in imp.columns:
-                        col_map["nominativo"] = "Cognome e Nome"
-
-                    # "Turno fuori residenza" può arrivare troncato / variato
-                    turno_col = None
-                    for c in imp.columns:
-                        if c.startswith("turno") and "residen" in c:
-                            turno_col = c
-                            break
-                    if turno_col:
-                        col_map[turno_col] = "Turno"
-
-                    imp = imp.rename(columns=col_map)
-
-                    # verifica colonne minime
-                    required = ["Matricola", "Cognome e Nome", "Turno"]
-                    missing = [c for c in required if c not in imp.columns]
-                    if missing:
-                        raise ValueError(f"Colonne mancanti nel file: {', '.join(missing)}")
-
-                    # tieni solo le colonne utili e aggiungi Inizio/Fine vuote
-                    imp = imp[required].copy()
-                    imp["Inizio"] = ""
-                    imp["Fine"] = ""
-
-                    rows = imp.to_dict("records")
-
-                    if st.button("✅ Importa e conferma"):
-                        extra_df = _build_extra_df(rows)
-                        st.session_state["extra_rows"] = pd.concat(
-                            [st.session_state["extra_rows"], extra_df], ignore_index=True
-                        )
-                        st.session_state["df_view"] = pd.concat(
-                            [st.session_state["df_view"], extra_df], ignore_index=True
-                        )
-                        st.session_state["show_transfer_ui"] = False
-                        st.success(f"Importate {len(extra_df)} trasferte.")
-                        _do_rerun()
-
-                except ImportError:
-                    st.error(
-                        "Per leggere file .xls serve il pacchetto 'xlrd' (versione 1.2.0). "
-                        "Installa/ricostruisci l'ambiente con: pip install xlrd==1.2.0"
-                    )
-                except Exception as e:
-                    st.error(f"Errore nel file import: {e}")
-
+        with col_btn2:
             if not st.session_state["extra_rows"].empty:
-                if st.button("🗑️ Svuota trasferte aggiunte"):
+                if st.button("🗑️ Svuota trasferte aggiunte", use_container_width=True):
                     st.session_state["extra_rows"] = st.session_state["extra_rows"].iloc[0:0]
                     base = st.session_state["df_view"]
                     if "_added" in base.columns:
@@ -441,7 +371,9 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
     # --- Export Excel ---
     xls_buf = io.BytesIO()
     with pd.ExcelWriter(xls_buf, engine="openpyxl") as writer:
-        _reorder_for_display(st.session_state["df_view"]).to_excel(writer, sheet_name="ServizioGiornaliero", index=False)
+        _reorder_for_display(st.session_state["df_view"]).to_excel(
+            writer, sheet_name="ServizioGiornaliero", index=False
+        )
     st.download_button(
         "⬇️ Scarica Excel",
         data=xls_buf.getvalue(),
@@ -453,12 +385,14 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
     with tempfile.TemporaryDirectory() as td:
         pdf_path   = Path(td) / "ServizioGiornaliero.pdf"
         inner_sort = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
-        build_pdf(pdf_path,
-                  st.session_state["df_view"],
-                  st.session_state["meta"],
-                  logo_path if logo_path.exists() else None,
-                  title=TITLE, inner_sort=inner_sort,
-                  exported_at=datetime.now())
+        build_pdf(
+            pdf_path,
+            st.session_state["df_view"],
+            st.session_state["meta"],
+            logo_path if logo_path.exists() else None,
+            title=TITLE, inner_sort=inner_sort,
+            exported_at=datetime.now()
+        )
         st.download_button(
             "⬇️ Scarica PDF",
             data=pdf_path.read_bytes(),
