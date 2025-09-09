@@ -14,23 +14,14 @@ import pandas as pd
 
 REST_CODES = {"R", "RR"}   # riposo
 
-# Eccezioni GLOBALI: valgono per tutti i depositi (match ESATTO)
-GLOBAL_EXC_PATTERNS = (
-    r"^IAST$",   # esattamente IAST
-    r"^N$",      # esattamente N
-)
+# Eccezioni GLOBALI
+GLOBAL_EXC_PATTERNS = (r"^IAST$", r"^N$",)
 
-# >>>>>>>>>>>>>>>>> ECCEZIONI E PREFISSI <<<<<<<<<<<<<<<<<
-EXC_ANCONA_PREFIXES = (
-    "D1R1","D1R2","D1R5","D2R1","D2R2","D2R3","D2R6",
-    "NP","ASC","V5",
-    "LU","MA","ME","GI","VE","SA","DO",
-)
+# Prefissi eccezioni ANCONA
+EXC_ANCONA_PREFIXES = ("D1R1","D1R2","D1R5","D2R1","D2R2","D2R3","D2R6","NP","ASC","V5","LU","MA","ME","GI","VE","SA","DO")
 EXC_ANCONA_PATTERNS  = tuple(rf"^{re.escape(p)}" for p in EXC_ANCONA_PREFIXES)
-EXC_OTHER_PATTERNS = tuple()  # IAST/N già coperti come GLOBAL (evitiamo NP)
-# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
-# --- Import moduli del progetto (con gestione errore) ---
+# --- Import moduli del progetto ---
 try:
     from src.process import read_input_excel, transform_dataframe, debug_probe
     from src.pdf_export import build_pdf
@@ -65,7 +56,7 @@ st.title("📋 Servizio Giornaliero – ExtraUrbano (Python)")
 st.caption("Drag & drop del file Excel (.xls/.xlsx), pulizia automatica, anteprima e export PDF/Excel (raggruppato per deposito).")
 
 cfg_dir   = Path("config")
-assets_dir= Path("assest")   # nome cartella come richiesto
+assets_dir= Path("assest")
 logo_path = assets_dir / "logo.jpg"
 
 # ====================== Session state ======================
@@ -88,15 +79,15 @@ def _res_to_prefix(res: str) -> str | None:
     if not isinstance(res, str): return None
     r = res.upper().replace("_", " ").strip()
     if "JESI URBANO" in r or r == "JU": return "JU"
-    if "JESI" in r or r == "J":       return "J"
-    if "MARINA" in r or r == "M":     return "M"
+    if "JESI" in r or r == "J":        return "J"
+    if "MARINA" in r or r == "M":      return "M"
     if "CASTELFIDARDO" in r or "C.FID" in r or r == "C": return "C"
-    if "OSIMO" in r or r == "O":      return "O"
+    if "OSIMO" in r or r == "O":       return "O"
     if "FILOTTRANO" in r or "FILOT" in r or r == "F":    return "F"
-    if "POLVERIGI" in r or r == "P":  return "P"
-    if "OSTRA" in r or r == "D":      return "D"
+    if "POLVERIGI" in r or r == "P":   return "P"
+    if "OSTRA" in r or r == "D":       return "D"
     if "BELVED" in r or r == "B" or "DEPBELVE" in r:     return "B"
-    if "ANCONA" in r or r == "A":     return "A"
+    if "ANCONA" in r or r == "A":      return "A"
     return None
 
 def _norm_turno(s) -> str:
@@ -122,7 +113,7 @@ def _should_highlight_turno(residenza, turno) -> bool:
     if not t or t in {"ASSENTE", *REST_CODES}: return False
     if _match_any(t, GLOBAL_EXC_PATTERNS): return False
     rp = _res_to_prefix(residenza)
-    if rp == "A":  # ANCONA
+    if rp == "A":
         if _match_any(t, EXC_ANCONA_PATTERNS): return False
     if t.startswith("JU"): b = "JU"
     elif t.startswith("J"): b = "J"
@@ -169,6 +160,26 @@ def _build_extra_df(rows: list[dict]) -> pd.DataFrame:
     df["_added"] = True
     keep = ["Matricola","Cognome e Nome","Turno","Inizio","Fine","Indennità e note","Residenza","_added"]
     return df[keep]
+
+# ---- NUOVO: offset +2 ore (solo righe non inserite manualmente) ----
+def _shift_time_str(s: str, hours: int = 2) -> str:
+    m = re.match(r"^\s*(\d{1,2}):([0-5]\d)\s*$", str(s or ""))
+    if not m:       # se non è un HH:MM valido, restituisco com'è
+        return s
+    h = (int(m.group(1)) + hours) % 24
+    mins = int(m.group(2))
+    return f"{h:02d}:{mins:02d}"
+
+def _apply_time_offset(df: pd.DataFrame, hours: int = 2) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    df2 = df.copy()
+    for col in ("Inizio", "Fine"):
+        if col in df2.columns:
+            # applica solo su righe NON aggiunte manualmente (_added!=True)
+            mask = ~df2.get("_added", pd.Series(False, index=df2.index)).fillna(False)
+            df2.loc[mask, col] = df2.loc[mask, col].astype(str).map(lambda x: _shift_time_str(x, hours))
+    return df2
 
 def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series, added_mask: pd.Series | None = None) -> str:
     df_html = g_disp.copy()
@@ -222,9 +233,14 @@ def render_preview(df_view: pd.DataFrame, meta: dict, inner_sort_choice: str):
                 if "Cognome e Nome" in g.columns: by.append("Cognome e Nome")
                 if "Inizio" in g.columns:         by.append("Inizio")
                 if by: g = g.sort_values(by=by).reset_index(drop=True)
+                # --- qui: compattazione + simbolo ↳ sotto il nome per turni successivi
                 if {"Cognome e Nome", "Matricola"}.issubset(g.columns):
-                    same_person = g[["Cognome e Nome", "Matricola"]].eq(g[["Cognome e Nome", "Matricola"]].shift(1)).all(axis=1)
-                    g.loc[same_person, ["Cognome e Nome", "Matricola"]] = ""
+                    same_person = g[["Cognome e Nome", "Matricola"]].eq(
+                        g[["Cognome e Nome", "Matricola"]].shift(1)
+                    ).all(axis=1)
+                    g.loc[same_person, "Cognome e Nome"] = "↳"
+                    g.loc[same_person, "Matricola"] = ""
+
             st.markdown(f"<h3 style='text-align:center; margin: 0.5rem 0 0.25rem 0;'>{res}</h3>", unsafe_allow_html=True)
             g_disp = _reorder_for_display(g)
             mask   = _trasferta_mask(g)
@@ -233,18 +249,21 @@ def render_preview(df_view: pd.DataFrame, meta: dict, inner_sort_choice: str):
             st.markdown(html, unsafe_allow_html=True)
     else:
         st.markdown("### **TUTTI**")
-        g_disp = _reorder_for_display(df_view)
-        mask   = _trasferta_mask(df_view)
-        added_mask = df_view["_added"].fillna(False) if "_added" in df_view.columns else pd.Series(False, index=df_view.index)
+        g = df_view.copy()
+        if {"Cognome e Nome", "Matricola"}.issubset(g.columns):
+            same_person = g[["Cognome e Nome", "Matricola"]].eq(g[["Cognome e Nome", "Matricola"]].shift(1)).all(axis=1)
+            g.loc[same_person, "Cognome e Nome"] = "↳"
+            g.loc[same_person, "Matricola"] = ""
+        g_disp = _reorder_for_display(g)
+        mask   = _trasferta_mask(g)
+        added_mask = g["_added"].fillna(False) if "_added" in g.columns else pd.Series(False, index=g.index)
         html   = _styled_html_table(g_disp, mask, added_mask)
         st.markdown(html, unsafe_allow_html=True)
 
 def _do_rerun():
     fn = getattr(st, "rerun", None)
-    if callable(fn):
-        fn()
-    else:
-        st.experimental_rerun()
+    if callable(fn): fn()
+    else: st.experimental_rerun()
 
 # ====================== UI ======================
 
@@ -255,13 +274,11 @@ with col1:
     inner_sort_choice = st.radio(
         "Ordina dentro ciascun deposito per:",
         ["Cognome e Nome (A→Z)", "Inizio (orario)"],
-        horizontal=True,
-        index=0
+        horizontal=True, index=0
     )
 with col2:
     show_absent = st.checkbox(
-        "Mostra anche gli 'Assente'",
-        value=True,
+        "Mostra anche gli 'Assente'", value=True,
         help="Se deselezionato nasconde le righe con Turno = Assente (vale per anteprima ed export)."
     )
 
@@ -292,14 +309,14 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
             before  = len(df_view)
             df_view = df_view[df_view["Turno"].astype(str).str.strip() != "Assente"].reset_index(drop=True)
             hidden  = before - len(df_view)
-            if hidden > 0:
-                st.info(f"Righe 'Assente' nascoste: {hidden}")
+            if hidden > 0: st.info(f"Righe 'Assente' nascoste: {hidden}")
 
-        # aggiungi eventuali trasferte già presenti
+        # Aggiungi eventuali trasferte inserite e poi applica +2 ore SOLO alle righe base
         if not st.session_state["extra_rows"].empty:
             df_view = pd.concat([df_view, st.session_state["extra_rows"]], ignore_index=True)
+        df_view = _apply_time_offset(df_view, hours=2)
 
-        # salva stato (NON renderizzare qui per evitare duplicati)
+        # salva stato
         st.session_state["df_view"] = df_view
         st.session_state["meta"] = meta
         st.session_state["last_inner_sort"] = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
@@ -309,7 +326,7 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
         st.error(f"Errore durante l'elaborazione: {e}")
         st.code("".join(traceback.format_exception(*sys.exc_info())))
 
-# ====================== Trasferte + Preview + Export (singolo render) ======================
+# ====================== Trasferte + Preview + Export ======================
 
 if st.session_state["df_view"] is not None and st.session_state["meta"] is not None:
     c1, c2 = st.columns([1,3])
@@ -325,9 +342,7 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
         default_rows = pd.DataFrame(
             [{"Matricola":"","Cognome e Nome":"","Turno":"","Inizio":"","Fine":""} for _ in range(start_rows)]
         )
-        grid = st.data_editor(
-            default_rows, num_rows="dynamic", use_container_width=True, key="manual_grid"
-        )
+        grid = st.data_editor(default_rows, num_rows="dynamic", use_container_width=True, key="manual_grid")
 
         col_btn1, col_btn2 = st.columns([1,1])
         with col_btn1:
@@ -344,12 +359,9 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
                     st.error("Compila Matricola, Cognome e Nome e Turno per ogni riga non vuota.")
                 else:
                     extra_df = _build_extra_df(rows)
-                    st.session_state["extra_rows"] = pd.concat(
-                        [st.session_state["extra_rows"], extra_df], ignore_index=True
-                    )
-                    st.session_state["df_view"] = pd.concat(
-                        [st.session_state["df_view"], extra_df], ignore_index=True
-                    )
+                    # non applichiamo offset alle manuali
+                    st.session_state["extra_rows"] = pd.concat([st.session_state["extra_rows"], extra_df], ignore_index=True)
+                    st.session_state["df_view"] = pd.concat([st.session_state["df_view"], extra_df], ignore_index=True)
                     st.session_state["show_transfer_ui"] = False
                     st.success(f"Inserite {len(extra_df)} trasferte.")
                     _do_rerun()
@@ -365,7 +377,7 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
                     st.info("Trasferte cancellate.")
                     _do_rerun()
 
-    # ---- Preview: UNICA chiamata per renderizzare ----
+    # ---- Anteprima
     render_preview(st.session_state["df_view"], st.session_state["meta"], inner_sort_choice)
 
     # --- Export Excel ---
@@ -387,7 +399,7 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
         inner_sort = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
         build_pdf(
             pdf_path,
-            st.session_state["df_view"],
+            st.session_state["df_view"],   # già con +2h per le righe base
             st.session_state["meta"],
             logo_path if logo_path.exists() else None,
             title=TITLE, inner_sort=inner_sort,
