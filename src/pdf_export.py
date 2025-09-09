@@ -9,7 +9,7 @@ from reportlab.lib.units import mm
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from xml.sax.saxutils import escape
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import pandas as pd
 import re
@@ -53,22 +53,22 @@ class CornerArrow(Flowable):
         self.height = float(size * 1.6)         # altezza sufficiente per la punta
         self._s = float(size)
         self._stroke = float(stroke)
-        self._shift = float(shift_left_mm)      # <— nuovo: offset a sinistra
+        self._shift = float(shift_left_mm)      # offset verso sinistra
 
     def draw(self):
         c = self.canv
         s = self._s
         # ancoraggio vicino al bordo destro della cella
         # aumenta self._shift per andare più a sinistra
-        x0 = self.width - (s * 4.2 + self._shift)   # <— qui uso l’offset
+        x0 = self.width - (s * 4.2 + self._shift)
         y0 = self.height * 0.55
 
         c.saveState()
         c.setLineWidth(self._stroke)
 
-        # verticale
+        # segmento verticale
         c.line(x0, y0 - s, x0, y0)
-        # orizzontale
+        # segmento orizzontale
         x1 = x0 + s * 3.2
         c.line(x0, y0 - s, x1, y0 - s)
         # punta freccia
@@ -77,6 +77,17 @@ class CornerArrow(Flowable):
 
         c.restoreState()
 
+
+# ======================= Utility orario =======================
+def _as_rome(dt: datetime | None) -> datetime:
+    """Rende dt in Europe/Rome. Se dt è naive, lo assume UTC."""
+    if dt is None:
+        return datetime.now(_TZ_ROMA)
+    # naive → assumo UTC
+    if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
+        return dt.replace(tzinfo=timezone.utc).astimezone(_TZ_ROMA)
+    # aware → converto a Rome
+    return dt.astimezone(_TZ_ROMA)
 
 
 # ======================= Utility evidenziazione =======================
@@ -293,8 +304,8 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
 
     elems: list = []
 
-    if exported_at is None:
-        exported_at = datetime.now(_TZ_ROMA)
+    # Normalizza l'orario a Europe/Rome (fix “-2 ore”)
+    exported_at = _as_rome(exported_at)
     export_text = exported_at.strftime("servizio esportato il %d/%m/%Y alle %H:%M")
 
     header_text = f"Servizio Giornaliero: {meta.get('giorno','')} {meta.get('data','')}"
@@ -352,7 +363,12 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
         if idx_nome is not None:
             for ridx, row in enumerate(data[1:], start=1):
                 if str(row[idx_nome]).strip() == ARROW_MARK:
-                    row[idx_nome] = CornerArrow(cell_width=col_widths[idx_nome], size=1.5*mm, stroke=0.8, shift_left_mm= 2*mm)
+                    row[idx_nome] = CornerArrow(
+                        cell_width=col_widths[idx_nome],
+                        size=1.5 * mm,        # dimensione freccia
+                        stroke=0.8,           # spessore linea
+                        shift_left_mm=2 * mm  # spostamento verso sinistra
+                    )
 
         tbl = Table(data, repeatRows=1, colWidths=col_widths)
 
