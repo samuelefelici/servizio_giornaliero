@@ -344,25 +344,79 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
                     _do_rerun()
 
         else:  # Importa
-            up = st.file_uploader("Carica XLS/XLSX con colonne: Matricola, Nominativo, Turno fuori residenza", type=["xls","xlsx"], key="imp_upl")
-            if up is not None:
-                try:
-                    imp = pd.read_excel(up)
-                    imp = imp.rename(columns={"Nominativo":"Cognome e Nome","Turno fuori residenza":"Turno"})
-                    keep = ["Matricola","Cognome e Nome","Turno"]
-                    imp = imp[[c for c in keep if c in imp.columns]].copy()
-                    imp["Inizio"] = ""
-                    imp["Fine"]   = ""
-                    rows = imp.to_dict("records")
-                    if st.button("✅ Importa e conferma"):
-                        extra_df = _build_extra_df(rows)
-                        st.session_state["extra_rows"] = pd.concat([st.session_state["extra_rows"], extra_df], ignore_index=True)
-                        st.session_state["df_view"] = pd.concat([st.session_state["df_view"], extra_df], ignore_index=True)
-                        st.session_state["show_transfer_ui"] = False
-                        st.success(f"Importate {len(extra_df)} trasferte.")
-                        _do_rerun()
-                except Exception as e:
-                    st.error(f"Errore nel file import: {e}")
+    up = st.file_uploader(
+        "Carica XLS/XLSX con colonne: Matricola, Nominativo, Turno fuori residenza",
+        type=["xls", "xlsx"],
+        key="imp_upl"
+    )
+    if up is not None:
+        try:
+            # scegli engine in base all’estensione
+            ext = Path(up.name).suffix.lower()
+            up.seek(0)
+            if ext == ".xls":
+                # richiede: pip install xlrd==1.2.0
+                imp = pd.read_excel(up, engine="xlrd")
+            elif ext == ".xlsx":
+                imp = pd.read_excel(up, engine="openpyxl")
+            else:
+                imp = pd.read_excel(up)  # fallback
+
+            # normalizza header (spazi, maiuscole/minuscole)
+            norm_cols = [str(c).strip().lower() for c in imp.columns]
+            imp.columns = norm_cols
+
+            # mappa colonne attese -> nostre colonne
+            col_map = {}
+            if "matricola" in imp.columns:
+                col_map["matricola"] = "Matricola"
+            if "nominativo" in imp.columns:
+                col_map["nominativo"] = "Cognome e Nome"
+
+            # "Turno fuori residenza" può arrivare troncato o con spazi diversi
+            turno_col = None
+            for c in imp.columns:
+                if c.startswith("turno") and "residenza" in c:
+                    turno_col = c
+                    break
+            if turno_col:
+                col_map[turno_col] = "Turno"
+
+            imp = imp.rename(columns=col_map)
+
+            # verifica colonne minime
+            required = ["Matricola", "Cognome e Nome", "Turno"]
+            missing = [c for c in required if c not in imp.columns]
+            if missing:
+                raise ValueError(f"Colonne mancanti nel file: {', '.join(missing)}")
+
+            # tieni solo le colonne utili e aggiungi Inizio/Fine vuote
+            imp = imp[required].copy()
+            imp["Inizio"] = ""
+            imp["Fine"] = ""
+
+            rows = imp.to_dict("records")
+
+            if st.button("✅ Importa e conferma"):
+                extra_df = _build_extra_df(rows)
+                st.session_state["extra_rows"] = pd.concat(
+                    [st.session_state["extra_rows"], extra_df], ignore_index=True
+                )
+                st.session_state["df_view"] = pd.concat(
+                    [st.session_state["df_view"], extra_df], ignore_index=True
+                )
+                st.session_state["show_transfer_ui"] = False
+                st.success(f"Importate {len(extra_df)} trasferte.")
+                _do_rerun()
+
+        except ImportError:
+            st.error(
+                "Per leggere file .xls serve il pacchetto 'xlrd' (versione 1.2.0). "
+                "Installa con: pip install xlrd==1.2.0"
+            )
+        except Exception as e:
+            st.error(f"Errore nel file import: {e}")
+
 
         if not st.session_state["extra_rows"].empty:
             if st.button("🗑️ Svuota trasferte aggiunte"):
