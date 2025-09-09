@@ -46,33 +46,37 @@ class CornerArrow(Flowable):
     Disegna un’icona “angolo + freccia verso destra” (tipo └→),
     ancorata al margine destro della cella.
     """
-    def __init__(self, cell_width: float, size: float = 3.5 * mm, stroke: float = 1.0):
+    def __init__(self, cell_width: float, size: float = 3.5 * mm,
+                 stroke: float = 1.0, shift_left_mm: float = 0.0):
         super().__init__()
         self.width = float(cell_width)          # la Table userà questa width
         self.height = float(size * 1.6)         # altezza sufficiente per la punta
         self._s = float(size)
         self._stroke = float(stroke)
+        self._shift = float(shift_left_mm)      # <— nuovo: offset a sinistra
 
     def draw(self):
         c = self.canv
         s = self._s
         # ancoraggio vicino al bordo destro della cella
-        x0 = self.width - s * 4.2
-        y0 = self.height * 0.55  # baseline leggermente sopra il centro
+        # aumenta self._shift per andare più a sinistra
+        x0 = self.width - (s * 4.2 + self._shift)   # <— qui uso l’offset
+        y0 = self.height * 0.55
 
         c.saveState()
         c.setLineWidth(self._stroke)
 
-        # segmento verticale (su)
+        # verticale
         c.line(x0, y0 - s, x0, y0)
-        # segmento orizzontale (verso destra)
+        # orizzontale
         x1 = x0 + s * 3.2
         c.line(x0, y0 - s, x1, y0 - s)
-        # punta freccia (a destra)
+        # punta freccia
         c.line(x1, y0 - s, x1 - s * 0.9, y0 - s + s * 0.55)
         c.line(x1, y0 - s, x1 - s * 0.9, y0 - s - s * 0.55)
 
         c.restoreState()
+
 
 
 # ======================= Utility evidenziazione =======================
@@ -348,7 +352,7 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
         if idx_nome is not None:
             for ridx, row in enumerate(data[1:], start=1):
                 if str(row[idx_nome]).strip() == ARROW_MARK:
-                    row[idx_nome] = CornerArrow(cell_width=col_widths[idx_nome], size=2*mm, stroke=1.0)
+                    row[idx_nome] = CornerArrow(cell_width=col_widths[idx_nome], size=1.8*mm, stroke=1.0, shift_left_mm= 1.2*mm)
 
         tbl = Table(data, repeatRows=1, colWidths=col_widths)
 
