@@ -246,6 +246,14 @@ def _do_rerun():
     else:
         st.experimental_rerun()
 
+# --- helper per sniffare il formato del file excel ---
+def _sniff_xlsx(fileobj) -> bool:
+    """Ritorna True se il contenuto è zip (tipico degli .xlsx). Non consuma lo stream."""
+    pos = fileobj.tell()
+    head = fileobj.read(4)
+    fileobj.seek(pos)
+    return head == b"PK\x03\x04"  # magic ZIP
+
 # ====================== UI ======================
 
 uploaded = st.file_uploader("Trascina qui il file oppure selezionalo", type=["xls","xlsx"])
@@ -351,32 +359,32 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
             )
             if up is not None:
                 try:
-            # scegli engine in base all’estensione
-                    ext = Path(up.name).suffix.lower()
+                    # scegli engine in base a contenuto + estensione
                     up.seek(0)
-                    if ext == ".xls":
-                        # richiede: pip install xlrd==1.2.0
-                        imp = pd.read_excel(up, engine="xlrd")
-                    elif ext == ".xlsx":
+                    is_xlsx_zip = _sniff_xlsx(up)
+                    ext = Path(up.name).suffix.lower()
+
+                    up.seek(0)
+                    if is_xlsx_zip or ext == ".xlsx":
                         imp = pd.read_excel(up, engine="openpyxl")
                     else:
-                        imp = pd.read_excel(up)  # fallback
+                        # .xls (BIFF) -> xlrd 1.2.0
+                        imp = pd.read_excel(up, engine="xlrd")
 
-                # normalizza header (spazi, maiuscole/minuscole)
-                    norm_cols = [str(c).strip().lower() for c in imp.columns]
-                    imp.columns = norm_cols
+                    # normalizza header (spazi, maiuscole/minuscole)
+                    imp.columns = [str(c).strip().lower() for c in imp.columns]
 
-                # mappa colonne attese -> nostre colonne
+                    # mappa colonne attese -> nostre colonne
                     col_map = {}
                     if "matricola" in imp.columns:
                         col_map["matricola"] = "Matricola"
                     if "nominativo" in imp.columns:
                         col_map["nominativo"] = "Cognome e Nome"
 
-            # "Turno fuori residenza" può arrivare troncato o con spazi diversi
+                    # "Turno fuori residenza" può arrivare troncato / variato
                     turno_col = None
                     for c in imp.columns:
-                        if c.startswith("turno") and "residenza" in c:
+                        if c.startswith("turno") and "residen" in c:
                             turno_col = c
                             break
                     if turno_col:
@@ -384,13 +392,13 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
 
                     imp = imp.rename(columns=col_map)
 
-            # verifica colonne minime
+                    # verifica colonne minime
                     required = ["Matricola", "Cognome e Nome", "Turno"]
                     missing = [c for c in required if c not in imp.columns]
                     if missing:
                         raise ValueError(f"Colonne mancanti nel file: {', '.join(missing)}")
 
-            # tieni solo le colonne utili e aggiungi Inizio/Fine vuote
+                    # tieni solo le colonne utili e aggiungi Inizio/Fine vuote
                     imp = imp[required].copy()
                     imp["Inizio"] = ""
                     imp["Fine"] = ""
@@ -412,21 +420,20 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
                 except ImportError:
                     st.error(
                         "Per leggere file .xls serve il pacchetto 'xlrd' (versione 1.2.0). "
-                        "Installa con: pip install xlrd==1.2.0"
+                        "Installa/ricostruisci l'ambiente con: pip install xlrd==1.2.0"
                     )
                 except Exception as e:
                     st.error(f"Errore nel file import: {e}")
 
-
-                if not st.session_state["extra_rows"].empty:
-                    if st.button("🗑️ Svuota trasferte aggiunte"):
-                        st.session_state["extra_rows"] = st.session_state["extra_rows"].iloc[0:0]
-                        base = st.session_state["df_view"]
-                        if "_added" in base.columns:
-                            base = base[~base["_added"].fillna(False)].copy()
-                        st.session_state["df_view"] = base
-                        st.info("Trasferte cancellate.")
-                        _do_rerun()
+            if not st.session_state["extra_rows"].empty:
+                if st.button("🗑️ Svuota trasferte aggiunte"):
+                    st.session_state["extra_rows"] = st.session_state["extra_rows"].iloc[0:0]
+                    base = st.session_state["df_view"]
+                    if "_added" in base.columns:
+                        base = base[~base["_added"].fillna(False)].copy()
+                    st.session_state["df_view"] = base
+                    st.info("Trasferte cancellate.")
+                    _do_rerun()
 
     # ---- Preview: UNICA chiamata per renderizzare ----
     render_preview(st.session_state["df_view"], st.session_state["meta"], inner_sort_choice)
