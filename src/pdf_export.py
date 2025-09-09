@@ -13,6 +13,8 @@ from datetime import datetime
 from pathlib import Path
 import pandas as pd
 import re
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 # TZ Europe/Rome
 try:
@@ -46,6 +48,30 @@ EXC_OTHER_PREFIXES = ("IAST", "N")
 # Dimensioni massime logo (regolabili)
 MAX_LOGO_W = 60 * mm
 MAX_LOGO_H = 22.5 * mm
+
+# Segnale di "secondo turno"
+ARROW_MARK = "↳"
+ARROW_FALLBACK = "»"  # se non abbiamo un font unicode
+
+def _register_unicode_font() -> str | None:
+    """
+    Prova a registrare DejaVu Sans. Restituisce il nome del font registrato
+    oppure None se non disponibile.
+    """
+    candidates = [
+        Path("assest/DejaVuSans.ttf"),
+        Path("assets/DejaVuSans.ttf"),
+        Path("DejaVuSans.ttf"),
+    ]
+    for p in candidates:
+        if p.exists():
+            try:
+                pdfmetrics.registerFont(TTFont("DejaVuSans", str(p)))
+                return "DejaVuSans"
+            except Exception:
+                pass
+    return None
+
 
 # ======================= Utility evidenziazione =======================
 def _res_to_prefix(res: str) -> str | None:
@@ -191,7 +217,7 @@ def _collapse_repeats(gdf: pd.DataFrame,
     if "Matricola" in g.columns:
         g.loc[dup_mask, "Matricola"] = ""
     if "Cognome e Nome" in g.columns:
-        g.loc[dup_mask, "Cognome e Nome"] = "↳"
+        g.loc[dup_mask, "Cognome e Nome"] = ARROW_MARK
     return g
 
 
@@ -241,6 +267,7 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
     - Larghezza piena, Note che assorbe lo spazio residuo, wrapping con '*' -> newline.
     - Grassetto su Turno/Inizio/Fine per righe in trasferta (con eccezioni).
     - Righe inserite (colonna '_added' True) in **grassetto su tutta la riga**.
+    - Simbolo ↳ per il secondo turno allineato a destra e mostrato correttamente (fallback »).
     """
     # Margini/doc
     right = 10 * mm
@@ -252,6 +279,9 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
                             rightMargin=right, leftMargin=left,
                             topMargin=top, bottomMargin=bottom)
     page_w = A4[0] - left - right  # larghezza utile
+
+    # Prova a registrare un font unicode per la freccia
+    unicode_font = _register_unicode_font()  # "DejaVuSans" oppure None
 
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle(
@@ -347,6 +377,16 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
         idx_inizio = col_idx.get("Inizio")
         idx_fine = col_idx.get("Fine")
 
+        # Gestione celle con freccia nella colonna "Cognome e Nome"
+        idx_nome = header.index("Cognome e Nome") if "Cognome e Nome" in header else None
+        arrow_cells: list[tuple[int, int]] = []
+        if idx_nome is not None:
+            for ridx, row in enumerate(data[1:], start=1):  # dalla riga 1 perché 0 è header
+                if str(row[idx_nome]).strip() == ARROW_MARK:
+                    if not unicode_font:
+                        row[idx_nome] = ARROW_FALLBACK  # fallback leggibile
+                    arrow_cells.append((idx_nome, ridx))
+
         col_widths = _calc_col_widths(page_w)
         tbl = Table(data, repeatRows=1, colWidths=col_widths)
 
@@ -372,6 +412,12 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
         for i, is_added in enumerate(added_mask.tolist(), start=1):  # +1 per header
             if is_added:
                 base_style.append(("FONTNAME", (0, i), (-1, i), "Helvetica-Bold"))
+
+        # Celle con freccia: allineamento a destra e font unicode (se disponibile)
+        for c, r in arrow_cells:
+            base_style.append(("ALIGN", (c, r), (c, r), "RIGHT"))
+            if unicode_font:
+                base_style.append(("FONTNAME", (c, r), (c, r), unicode_font))
 
         tbl.setStyle(TableStyle(base_style))
         elems.append(tbl)
