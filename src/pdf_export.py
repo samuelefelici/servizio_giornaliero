@@ -348,7 +348,7 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
         if idx_nome is not None:
             for ridx, row in enumerate(data[1:], start=1):
                 if str(row[idx_nome]).strip() == ARROW_MARK:
-                    row[idx_nome] = CornerArrow(cell_width=col_widths[idx_nome], size=3.5*mm, stroke=1.0)
+                    row[idx_nome] = CornerArrow(cell_width=col_widths[idx_nome], size=2*mm, stroke=1.0)
 
         tbl = Table(data, repeatRows=1, colWidths=col_widths)
 
