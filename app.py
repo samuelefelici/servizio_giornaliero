@@ -182,22 +182,38 @@ def _apply_time_offset(df: pd.DataFrame, hours: int = 2) -> pd.DataFrame:
     return df2
 
 def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series, added_mask: pd.Series | None = None) -> str:
+    """
+    - Bold su Turno/Inizio/Fine per trasferte
+    - Righe aggiunte in blu
+    - * nelle note = a capo
+    - Freccia ↳ in colonna 'Cognome e Nome' allineata a destra
+    """
     df_html = g_disp.copy()
     note_col = "Indennità e note"
     if note_col in df_html.columns:
-        df_html[note_col] = df_html[note_col].astype(str).apply(lambda x: html_escape(x).replace("*", "<br/>"))
+        df_html[note_col] = (
+            df_html[note_col].astype(str).apply(lambda x: html_escape(x).replace("*", "<br/>"))
+        )
+
     subset_cols = [c for c in ["Turno", "Inizio", "Fine"] if c in df_html.columns]
-    if added_mask is None: added_mask = pd.Series(False, index=df_html.index)
+    if added_mask is None:
+        added_mask = pd.Series(False, index=df_html.index)
 
     def _bold_if_trasferta(row):
         return (["font-weight: bold"] * len(row)) if trasferta_mask.loc[row.name] else ([""] * len(row))
+
     def _blue_if_added(row):
         return (["color:#0b5ed7"] * len(row)) if added_mask.loc[row.name] else ([""] * len(row))
+
+    # stile cella: se la colonna è "Cognome e Nome" e il valore è ↳, allinea a destra
+    def _right_if_arrow(val):
+        return "text-align: right;" if str(val).strip() == "↳" else ""
 
     sty = (df_html.style
            .hide(axis="index")
            .apply(_blue_if_added, axis=1)
            .apply(_bold_if_trasferta, axis=1, subset=subset_cols)
+           .applymap(_right_if_arrow, subset=["Cognome e Nome"] if "Cognome e Nome" in df_html.columns else None)
            .set_table_styles([
                {"selector": "table", "props": [("width","100%"), ("table-layout","fixed"), ("border-collapse","collapse")]},
                {"selector": "th",    "props": [("background","#f5f5f5"), ("text-align","left"), ("padding","6px")]},
@@ -207,6 +223,7 @@ def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series, added_ma
            ], overwrite=False)
           )
     return f'<div class="serv-table-wrap">{sty.to_html(escape=False)}</div>'
+
 
 def render_preview(df_view: pd.DataFrame, meta: dict, inner_sort_choice: str):
     st.success(f"File elaborato. Data: {meta.get('data','?')} – {meta.get('giorno','?')} (fonte: {meta.get('origine','?')})")
