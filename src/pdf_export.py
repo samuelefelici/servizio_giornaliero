@@ -469,11 +469,9 @@ def build_pdf(
                 # Colora Nome
                 if idx_nome is not None:
                     base_style.append(("FONTNAME", (idx_nome, i), (idx_nome, i), "Helvetica-Bold"))
-                    base_style.append(("TEXTCOLOR", (idx_nome, i), (idx_nome, i), colors.HexColor("#0b5ed7")))
                 # Colora Turno/Inizio/Fine
                 for cidx in col_idx.values():
                     base_style.append(("FONTNAME", (cidx, i), (cidx, i), "Helvetica-Bold"))
-                    base_style.append(("TEXTCOLOR", (cidx, i), (cidx, i), colors.HexColor("#0b5ed7")))
 
         # Righe aggiunte: testo blu sull'intera riga (plus grassetto già presente)
         for i in added_rows:
