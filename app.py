@@ -1,8 +1,7 @@
-# app.py
 import os, sys, re, io, tempfile
 from pathlib import Path
 from html import escape as html_escape
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # --- Path per import locali ---
 ROOT = Path(__file__).resolve().parent
@@ -161,26 +160,6 @@ def _build_extra_df(rows: list[dict]) -> pd.DataFrame:
     keep = ["Matricola","Cognome e Nome","Turno","Inizio","Fine","Indennità e note","Residenza","_added"]
     return df[keep]
 
-# ---- NUOVO: offset +2 ore (solo righe non inserite manualmente) ----
-def _shift_time_str(s: str, hours: int = 2) -> str:
-    m = re.match(r"^\s*(\d{1,2}):([0-5]\d)\s*$", str(s or ""))
-    if not m:       # se non è un HH:MM valido, restituisco com'è
-        return s
-    h = (int(m.group(1)) + hours) % 24
-    mins = int(m.group(2))
-    return f"{h:02d}:{mins:02d}"
-
-def _apply_time_offset(df: pd.DataFrame, hours: int = 2) -> pd.DataFrame:
-    if df is None or df.empty:
-        return df
-    df2 = df.copy()
-    for col in ("Inizio", "Fine"):
-        if col in df2.columns:
-            # applica solo su righe NON aggiunte manualmente (_added!=True)
-            mask = ~df2.get("_added", pd.Series(False, index=df2.index)).fillna(False)
-            df2.loc[mask, col] = df2.loc[mask, col].astype(str).map(lambda x: _shift_time_str(x, hours))
-    return df2
-
 def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series, added_mask: pd.Series | None = None) -> str:
     """
     - Bold su Turno/Inizio/Fine per trasferte
@@ -328,10 +307,11 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
             hidden  = before - len(df_view)
             if hidden > 0: st.info(f"Righe 'Assente' nascoste: {hidden}")
 
-        # Aggiungi eventuali trasferte inserite e poi applica +2 ore SOLO alle righe base
+        # Aggiungi eventuali trasferte inserite
         if not st.session_state["extra_rows"].empty:
             df_view = pd.concat([df_view, st.session_state["extra_rows"]], ignore_index=True)
-        df_view = _apply_time_offset(df_view, hours=2)
+        # >>>> NON APPLICARE OFFSET SUGLI ORARI <<<<
+        # df_view = _apply_time_offset(df_view, hours=2)
 
         # salva stato
         st.session_state["df_view"] = df_view
@@ -416,11 +396,11 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
         inner_sort = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
         build_pdf(
             pdf_path,
-            st.session_state["df_view"],   # già con +2h per le righe base
+            st.session_state["df_view"],
             st.session_state["meta"],
             logo_path if logo_path.exists() else None,
             title=TITLE, inner_sort=inner_sort,
-            exported_at=datetime.now()
+            exported_at=datetime.now() + timedelta(hours=2)  # <<<<< OFFSET SOLO SULLA DATA DI EXPORT
         )
         st.download_button(
             "⬇️ Scarica PDF",
