@@ -259,6 +259,16 @@ def _calc_col_widths(page_width: float) -> list[float]:
 def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
               logo_path: Path | None = None, title: str = "Servizio Giornaliero",
               inner_sort: str = "nome", exported_at: datetime | None = None):
+                      # ================== Auto-nome file: SG_ggmmaaaa.pdf ==================
+    oggi = datetime.now(_TZ_ROMA)
+    file_name = f"SG_{oggi.strftime('%d%m%Y')}.pdf"
+    # Se path_out è una cartella, crea il file dentro di essa
+    if path_out.is_dir():
+        path_out = path_out / file_name
+    else:
+        # Se path_out è un file, sostituisci il nome
+        path_out = path_out.with_name(file_name)
+
     """
     - Titolo a sinistra + logo a destra con nota in piccolo sotto il logo
     - Wrapping note con '*' -> newline forzato
