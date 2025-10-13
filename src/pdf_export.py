@@ -41,15 +41,22 @@ MAX_LOGO_H = 22.5 * mm
 ARROW_MARK = "↳"  # segnale usato nella colonna nome per “secondo turno”
 BLUE = colors.HexColor("#0b5ed7")  # colore testo per righe aggiunte (come anteprima)
 
+
 # ---------- Freccia vettoriale (no font) ----------
 class CornerArrow(Flowable):
     """
     Disegna un’icona “angolo + freccia verso destra” (tipo └→),
     ancorata al margine destro della cella.
     """
-    def __init__(self, cell_width: float, size: float = 3.5 * mm,
-                 stroke: float = 1.0, shift_left_mm: float = 0.0,
-                 stroke_color=colors.black):
+
+    def __init__(
+        self,
+        cell_width: float,
+        size: float = 3.5 * mm,
+        stroke: float = 1.0,
+        shift_left_mm: float = 0.0,
+        stroke_color=colors.black,
+    ):
         super().__init__()
         self.width = float(cell_width)          # la Table userà questa width
         self.height = float(size * 1.6)         # altezza sufficiente per la punta
@@ -96,32 +103,47 @@ def _res_to_prefix(res: str) -> str | None:
     if not isinstance(res, str):
         return None
     r = res.upper().replace("_", " ").strip()
-    if "JESI URBANO" in r or r == "JU": return "JU"
-    if "JESI" in r or r == "J":        return "J"
-    if "MARINA" in r or r == "M":      return "M"
-    if "CASTELFIDARDO" in r or "C.FID" in r or r == "C": return "C"
-    if "OSIMO" in r or r == "O":       return "O"
-    if "FILOTTRANO" in r or "FILOT" in r or r == "F":    return "F"
-    if "POLVERIGI" in r or r == "P":   return "P"
-    if "OSTRA" in r or r == "D":       return "D"
-    if "BELVED" in r or r == "B" or "DEPBELVE" in r:     return "B"
-    if "ANCONA" in r or r == "A":      return "A"
+    if "JESI URBANO" in r or r == "JU":
+        return "JU"
+    if "JESI" in r or r == "J":
+        return "J"
+    if "MARINA" in r or r == "M":
+        return "M"
+    if "CASTELFIDARDO" in r or "C.FID" in r or r == "C":
+        return "C"
+    if "OSIMO" in r or r == "O":
+        return "O"
+    if "FILOTTRANO" in r or "FILOT" in r or r == "F":
+        return "F"
+    if "POLVERIGI" in r or r == "P":
+        return "P"
+    if "OSTRA" in r or r == "D":
+        return "D"
+    if "BELVED" in r or r == "B" or "DEPBELVE" in r:
+        return "B"
+    if "ANCONA" in r or r == "A":
+        return "A"
     return None
+
 
 def _norm_turno(s) -> str:
     return str(s or "").upper().strip().replace(".", "").replace(" ", "")
+
 
 def _starts_with_any(raw_turno: str, prefixes: tuple[str, ...]) -> bool:
     t = _norm_turno(raw_turno)
     return any(t.startswith(p) for p in prefixes)
 
+
 def _match_any(s: str, patterns: tuple[str, ...]) -> bool:
     return any(re.match(p, s) for p in patterns)
+
 
 def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
     if prefix in {"J", "JU"}:
         return {"J", "JU"}
     return {prefix} if prefix else set()
+
 
 def _should_highlight_turno(residenza, turno) -> bool:
     t = _norm_turno(turno)
@@ -138,30 +160,40 @@ def _should_highlight_turno(residenza, turno) -> bool:
         if _starts_with_any(t, EXC_OTHER_PREFIXES):
             return False
 
-    if t.startswith("JU"): b = "JU"
-    elif t.startswith("J"): b = "J"
-    else: b = t[0] if t else None
+    if t.startswith("JU"):
+        b = "JU"
+    elif t.startswith("J"):
+        b = "J"
+    else:
+        b = t[0] if t else None
 
     if not rp or not b:
         return False
     return b not in _accepted_prefixes_for_res(rp)
 
+
 def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
     if "Residenza" not in df.columns or "Turno" not in df.columns:
         return pd.Series(False, index=df.index)
-    return df.apply(lambda r: _should_highlight_turno(r.get("Residenza"), r.get("Turno")), axis=1)
+    return df.apply(
+        lambda r: _should_highlight_turno(r.get("Residenza"), r.get("Turno")),
+        axis=1,
+    )
+
 
 # ======================= Header helper =======================
-def _header_table(title_para: Paragraph,
-                  logo_path: Path | None,
-                  page_w: float,
-                  export_text: str,
-                  small_style: ParagraphStyle) -> Table:
+def _header_table(
+    title_para: Paragraph,
+    logo_path: Path | None,
+    page_w: float,
+    export_text: str,
+    small_style: ParagraphStyle,
+) -> Table:
     font_name = getattr(small_style, "fontName", "Helvetica")
     font_size = getattr(small_style, "fontSize", 8)
-    text_w    = stringWidth(export_text, font_name, font_size)
+    text_w = stringWidth(export_text, font_name, font_size)
 
-    right_w = max(MAX_LOGO_W, text_w + 4*mm)
+    right_w = max(MAX_LOGO_W, text_w + 4 * mm)
 
     if logo_path and logo_path.exists():
         img = Image(str(logo_path))
@@ -172,29 +204,36 @@ def _header_table(title_para: Paragraph,
     small_para = Paragraph(escape(export_text), small_style)
 
     right_col = Table([[img], [small_para]], colWidths=[right_w])
-    right_col.setStyle(TableStyle([
-        ("ALIGN",  (0,0), (0,0), "CENTER"),
-        ("ALIGN",  (0,1), (0,1), "RIGHT"),
-        ("TOPPADDING",   (0,1), (0,1), 6),
-        ("LEFTPADDING",  (0,0), (-1,-1), 0),
-        ("RIGHTPADDING", (0,0), (-1,-1), 0),
-        ("BOTTOMPADDING",(0,0), (-1,-1), 0),
-    ]))
+    right_col.setStyle(
+        TableStyle([
+            ("ALIGN", (0, 0), (0, 0), "CENTER"),
+            ("ALIGN", (0, 1), (0, 1), "RIGHT"),
+            ("TOPPADDING", (0, 1), (0, 1), 6),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ])
+    )
 
     tbl = Table([[title_para, right_col]], colWidths=[page_w - right_w, right_w])
-    tbl.setStyle(TableStyle([
-        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-        ("LEFTPADDING",  (0,0), (-1,-1), 0),
-        ("RIGHTPADDING", (0,0), (-1,-1), 0),
-        ("TOPPADDING",   (0,0), (-1,-1), 0),
-        ("BOTTOMPADDING",(0,0), (-1,-1), 4),
-    ]))
+    tbl.setStyle(
+        TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ])
+    )
     return tbl
 
+
 # ======================= Shaping tabella =======================
-def _collapse_repeats(gdf: pd.DataFrame,
-                      key_cols=("Cognome e Nome", "Matricola"),
-                      collapse_cols=("Cognome e Nome", "Matricola")) -> pd.DataFrame:
+def _collapse_repeats(
+    gdf: pd.DataFrame,
+    key_cols=("Cognome e Nome", "Matricola"),
+    collapse_cols=("Cognome e Nome", "Matricola"),
+) -> pd.DataFrame:
     """
     Sui record consecutivi della stessa persona azzera i campi ripetitivi,
     ma sotto il Nome mostra il simbolo ↳ per indicare un secondo turno.
@@ -209,6 +248,7 @@ def _collapse_repeats(gdf: pd.DataFrame,
     if "Cognome e Nome" in g.columns:
         g.loc[dup_mask, "Cognome e Nome"] = ARROW_MARK
     return g
+
 
 def _table_data_for(
     df: pd.DataFrame,
@@ -245,21 +285,29 @@ def _table_data_for(
 
     return table_rows
 
+
 def _calc_col_widths(page_width: float) -> list[float]:
     w_matricola = 24 * mm
-    w_nome      = 60 * mm
-    w_turno     = 22 * mm
-    w_inizio    = 18 * mm
-    w_fine      = 18 * mm
+    w_nome = 60 * mm
+    w_turno = 22 * mm
+    w_inizio = 18 * mm
+    w_fine = 18 * mm
     used = w_matricola + w_nome + w_turno + w_inizio + w_fine
     w_note = max(30 * mm, page_width - used)
     return [w_matricola, w_nome, w_turno, w_inizio, w_fine, w_note]
 
+
 # ======================= Build PDF =======================
-def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
-              logo_path: Path | None = None, title: str = "Servizio Giornaliero",
-              inner_sort: str = "nome", exported_at: datetime | None = None):
-                      # ================== Auto-nome file: SG_ggmmaaaa.pdf ==================
+def build_pdf(
+    path_out: Path,
+    df: pd.DataFrame,
+    meta: dict,
+    logo_path: Path | None = None,
+    title: str = "Servizio Giornaliero",
+    inner_sort: str = "nome",
+    exported_at: datetime | None = None,
+):
+    # ================== Auto-nome file: SG_ggmmaaaa.pdf ==================
     oggi = datetime.now(_TZ_ROMA)
     file_name = f"SG_{oggi.strftime('%d%m%Y')}.pdf"
     # Se path_out è una cartella, crea il file dentro di essa
@@ -277,13 +325,18 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
     """
     # Margini/doc
     right = 10 * mm
-    left  = 10 * mm
-    top   = 12 * mm
-    bottom= 12 * mm
+    left = 10 * mm
+    top = 12 * mm
+    bottom = 12 * mm
 
-    doc = SimpleDocTemplate(str(path_out), pagesize=A4,
-                            rightMargin=right, leftMargin=left,
-                            topMargin=top, bottomMargin=bottom)
+    doc = SimpleDocTemplate(
+        str(path_out),
+        pagesize=A4,
+        rightMargin=right,
+        leftMargin=left,
+        topMargin=top,
+        bottomMargin=bottom,
+    )
     page_w = A4[0] - left - right
 
     styles = getSampleStyleSheet()
@@ -334,8 +387,8 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
     exported_at = _as_rome(exported_at)
     export_text = exported_at.strftime("servizio esportato il %d/%m/%Y alle %H:%M")
 
-    header_text = f"Servizio Giornaliero: {meta.get('giorno','')} {meta.get('data','')}"
-    title_para  = Paragraph(header_text, title_style)
+    header_text = f"Servizio Giornaliero: {meta.get('giorno', '')} {meta.get('data', '')}"
+    title_para = Paragraph(header_text, title_style)
     elems.append(_header_table(title_para, logo_path, page_w, export_text, small_note_style))
 
     # Raggruppamento per Residenza
@@ -366,7 +419,11 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
             )
 
         trasferte = _trasferta_mask(gdf)
-        added_mask = gdf["_added"].fillna(False) if "_added" in gdf.columns else pd.Series(False, index=gdf.index)
+        added_mask = (
+            gdf["_added"].fillna(False)
+            if "_added" in gdf.columns
+            else pd.Series(False, index=gdf.index)
+        )
 
         if not first_block:
             elems.append(Spacer(1, 3 * mm))
@@ -398,16 +455,16 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
                         size=1.5 * mm,
                         stroke=0.8,
                         shift_left_mm=2 * mm,
-                        stroke_color=stroke_col
+                        stroke_color=stroke_col,
                     )
 
         tbl = Table(data, repeatRows=1, colWidths=col_widths)
 
         base_style = [
-            ("GRID",       (0, 0), (-1, -1), 0.25, colors.grey),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
             ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
-            ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("VALIGN",     (0, 0), (-1, -1), "TOP"),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ]
         if idx_inizio is not None:
             base_style.append(("ALIGN", (idx_inizio, 1), (idx_inizio, -1), "CENTER"))
@@ -424,7 +481,7 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
         # Righe aggiunte: testo blu sull'intera riga (plus grassetto già presente)
         for i in added_rows:
             base_style.append(("TEXTCOLOR", (0, i), (-1, i), BLUE))
-            base_style.append(("FONTNAME",  (0, i), (-1, i), "Helvetica-Bold"))
+            base_style.append(("FONTNAME", (0, i), (-1, i), "Helvetica-Bold"))
 
         tbl.setStyle(TableStyle(base_style))
         elems.append(tbl)
