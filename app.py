@@ -310,8 +310,6 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
         # Aggiungi eventuali trasferte inserite
         if not st.session_state["extra_rows"].empty:
             df_view = pd.concat([df_view, st.session_state["extra_rows"]], ignore_index=True)
-        # >>>> NON APPLICARE OFFSET SUGLI ORARI <<<<
-        # df_view = _apply_time_offset(df_view, hours=2)
 
         # salva stato
         st.session_state["df_view"] = df_view
@@ -356,7 +354,6 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
                     st.error("Compila Matricola, Cognome e Nome e Turno per ogni riga non vuota.")
                 else:
                     extra_df = _build_extra_df(rows)
-                    # non applichiamo offset alle manuali
                     st.session_state["extra_rows"] = pd.concat([st.session_state["extra_rows"], extra_df], ignore_index=True)
                     st.session_state["df_view"] = pd.concat([st.session_state["df_view"], extra_df], ignore_index=True)
                     st.session_state["show_transfer_ui"] = False
@@ -400,7 +397,7 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
             st.session_state["meta"],
             logo_path if logo_path.exists() else None,
             title=TITLE, inner_sort=inner_sort,
-            exported_at=datetime.now() + timedelta(hours=2)  # <<<<< OFFSET SOLO SULLA DATA DI EXPORT
+            exported_at=datetime.now() + timedelta(hours=2)
         )
         st.download_button(
             "⬇️ Scarica PDF",
