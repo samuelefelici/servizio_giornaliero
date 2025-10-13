@@ -40,6 +40,10 @@ MAX_LOGO_H = 22.5 * mm
 ARROW_MARK = "↳"  # segnale usato nella colonna nome per “secondo turno”
 BLUE = colors.HexColor("#0b5ed7")  # colore testo per righe aggiunte (come anteprima)
 
+def _is_turno_numero(turno: str) -> bool:
+    t = str(turno).strip()
+    return bool(re.match(r"^\d{3}", t)) # Es: 510, 520 ecc.
+
 # ---------- Freccia vettoriale (no font) ----------
 class CornerArrow(Flowable):
     """
@@ -178,7 +182,6 @@ def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
         axis=1,
     )
 
-
 # ======================= Header helper =======================
 def _header_table(
     title_para: Paragraph,
@@ -225,17 +228,12 @@ def _header_table(
     )
     return tbl
 
-
 # ======================= Shaping tabella =======================
 def _collapse_repeats(
     gdf: pd.DataFrame,
     key_cols=("Cognome e Nome", "Matricola"),
     collapse_cols=("Cognome e Nome", "Matricola"),
 ) -> pd.DataFrame:
-    """
-    Sui record consecutivi della stessa persona azzera i campi ripetitivi,
-    ma sotto il Nome mostra il simbolo ↳ per indicare un secondo turno.
-    """
     missing = [c for c in key_cols if c not in gdf.columns]
     if missing:
         return gdf
@@ -247,19 +245,12 @@ def _collapse_repeats(
         g.loc[dup_mask, "Cognome e Nome"] = ARROW_MARK
     return g
 
-
 def _table_data_for(
     df: pd.DataFrame,
     para_style: ParagraphStyle,
     para_style_blue: ParagraphStyle | None = None,
     rows_blue: set[int] | None = None,
 ):
-    """
-    Converte df in dati per Table:
-    - applica DISPLAY_ORDER, rimuove 'Residenza'
-    - trasforma la colonna Note in Paragraph (wrapping, '*' -> <br/>)
-    - se la riga è in rows_blue e para_style_blue è fornito, la colonna Note usa lo stile blu
-    """
     rows_blue = rows_blue or set()
     cols = [c for c in DISPLAY_ORDER if c in df.columns]
     dfp = df.copy()
@@ -272,17 +263,15 @@ def _table_data_for(
 
     idx_note = header.index("Indennità e note") if "Indennità e note" in header else None
     table_rows = [header]
-    for ridx, r in enumerate(rows, start=1):  # 1-based (per allinearsi agli indici della Table)
+    for ridx, r in enumerate(rows, start=1):  # 1-based
         if idx_note is not None:
             txt = str(r[idx_note])
             txt = escape(txt).replace("*", "<br/>")
-            # Stile blu sulle righe segnate
             style_to_use = para_style_blue if (para_style_blue and ridx in rows_blue) else para_style
             r[idx_note] = Paragraph(txt, style_to_use)
         table_rows.append(r)
 
     return table_rows
-
 
 def _calc_col_widths(page_width: float) -> list[float]:
     w_matricola = 24 * mm
@@ -294,7 +283,6 @@ def _calc_col_widths(page_width: float) -> list[float]:
     w_note = max(30 * mm, page_width - used)
     return [w_matricola, w_nome, w_turno, w_inizio, w_fine, w_note]
 
-
 # ======================= Build PDF =======================
 def build_pdf(
     path_out: Path,
@@ -305,17 +293,13 @@ def build_pdf(
     inner_sort: str = "nome",
     exported_at: datetime | None = None,
 ):
-    # ================== Auto-nome file: SG_ggmmaaaa.pdf ==================
     oggi = datetime.now(_TZ_ROMA)
     file_name = f"SG_{oggi.strftime('%d%m%Y')}.pdf"
-    # Se path_out è una cartella, crea il file dentro di essa
     if path_out.is_dir():
         path_out = path_out / file_name
     else:
-        # Se path_out è un file, sostituisci il nome
         path_out = path_out.with_name(file_name)
 
-    # Margini/doc
     right = 10 * mm
     left = 10 * mm
     top = 12 * mm
@@ -357,7 +341,6 @@ def build_pdf(
         leading=12,
         wordWrap="CJK",
     )
-    # Stile note blu (per righe aggiunte)
     note_style_blue = ParagraphStyle(
         "NoteBodyBlue",
         parent=note_style,
@@ -375,7 +358,6 @@ def build_pdf(
 
     elems: list = []
 
-    # Orario Europe/Rome
     exported_at = _as_rome(exported_at)
     export_text = exported_at.strftime("servizio esportato il %d/%m/%Y alle %H:%M")
 
@@ -383,7 +365,6 @@ def build_pdf(
     title_para = Paragraph(header_text, title_style)
     elems.append(_header_table(title_para, logo_path, page_w, export_text, small_note_style))
 
-    # Raggruppamento per Residenza
     if "Residenza" not in df.columns:
         blocks = [("TUTTI", df)]
     else:
@@ -392,7 +373,6 @@ def build_pdf(
 
     first_block = True
     for res_name, gdf in blocks:
-        # Ordinamento interno
         if inner_sort == "inizio" and "Inizio" in gdf.columns:
             by = ["Inizio"] + (["Cognome e Nome"] if "Cognome e Nome" in gdf.columns else [])
             gdf = gdf.sort_values(by=by).reset_index(drop=True)
@@ -423,16 +403,12 @@ def build_pdf(
 
         elems.append(Paragraph(res_name, group_style))
 
-        # Indici delle righe aggiunte (1-based, esclusa header)
         added_rows = {i for i, v in enumerate(added_mask.tolist(), start=1) if v}
 
-        # Tabella dati (nota: per le righe blu, la colonna Note usa lo stile blu)
         data = _table_data_for(gdf, note_style, para_style_blue=note_style_blue, rows_blue=added_rows)
         header = data[0]
 
         col_idx = {name: header.index(name) for name in ["Turno", "Inizio", "Fine"] if name in header}
-        idx_inizio = col_idx.get("Inizio")
-        idx_fine = col_idx.get("Fine")
         idx_nome = header.index("Cognome e Nome") if "Cognome e Nome" in header else None
         idx_matricola = header.index("Matricola") if "Matricola" in header else None
 
@@ -459,31 +435,31 @@ def build_pdf(
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ]
+
+        # --- CENTRO colonne orario ---
+        idx_inizio = col_idx.get("Inizio")
+        idx_fine = col_idx.get("Fine")
         if idx_inizio is not None:
             base_style.append(("ALIGN", (idx_inizio, 1), (idx_inizio, -1), "CENTER"))
         if idx_fine is not None:
             base_style.append(("ALIGN", (idx_fine, 1), (idx_fine, -1), "CENTER"))
 
-        # Grassetto/blu per trasferte automatiche (Matricola, Nome, Turno, Inizio, Fine, solo se NON aggiunta manualmente)
-        for i, is_tr in enumerate(trasferte.tolist(), start=1):
-            if is_tr and i not in added_rows:
-                # Colora Matricola
-                if idx_matricola is not None:
-                    base_style.append(("FONTNAME", (idx_matricola, i), (idx_matricola, i), "Helvetica-Bold"))
-                    base_style.append(("TEXTCOLOR", (idx_matricola, i), (idx_matricola, i), colors.HexColor("#0b5ed7")))
-                # Colora Nome
-                if idx_nome is not None:
-                    base_style.append(("FONTNAME", (idx_nome, i), (idx_nome, i), "Helvetica-Bold"))
-                    base_style.append(("TEXTCOLOR", (idx_nome, i), (idx_nome, i), colors.HexColor("#0b5ed7")))
-                # Colora Turno/Inizio/Fine
-                for cidx in col_idx.values():
-                    base_style.append(("FONTNAME", (cidx, i), (cidx, i), "Helvetica-Bold"))
-                    base_style.append(("TEXTCOLOR", (cidx, i), (cidx, i), colors.HexColor("#0b5ed7")))
-
-        # Righe aggiunte: testo blu sull'intera riga (plus grassetto già presente)
-        for i in added_rows:
-            base_style.append(("TEXTCOLOR", (0, i), (-1, i), BLUE))
-            base_style.append(("FONTNAME", (0, i), (-1, i), "Helvetica-Bold"))
+        # --- LOGICA STILE ---
+        for i, row in enumerate(data[1:], start=1):
+            turno_val = row[header.index("Turno")] if "Turno" in header else ""
+            # Righe aggiunte manualmente: tutta la riga blu/grassetto
+            if i in added_rows:
+                base_style.append(("TEXTCOLOR", (0, i), (-1, i), BLUE))
+                base_style.append(("FONTNAME", (0, i), (-1, i), "Helvetica-Bold"))
+            # Righe con turno numerico (510, 520, ecc): tutta la riga grassetto
+            elif _is_turno_numero(turno_val):
+                base_style.append(("FONTNAME", (0, i), (-1, i), "Helvetica-Bold"))
+            # Trasferte automatiche: blu/grassetto su Matricola, Nome, Turno, Inizio, Fine
+            elif trasferte.loc[i-1]:
+                for idx in [idx_matricola, idx_nome] + list(col_idx.values()):
+                    if idx is not None:
+                        base_style.append(("FONTNAME", (idx, i), (idx, i), "Helvetica-Bold"))
+                        base_style.append(("TEXTCOLOR", (idx, i), (idx, i), colors.HexColor("#0b5ed7")))
 
         tbl.setStyle(TableStyle(base_style))
         elems.append(tbl)
