@@ -487,3 +487,4 @@ def build_pdf(
         elems.append(tbl)
 
     doc.build(elems)
+    return path_out
