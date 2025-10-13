@@ -161,12 +161,6 @@ def _build_extra_df(rows: list[dict]) -> pd.DataFrame:
     return df[keep]
 
 def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series, added_mask: pd.Series | None = None) -> str:
-    """
-    - Bold su Turno/Inizio/Fine per trasferte
-    - Righe aggiunte in blu
-    - * nelle note = a capo
-    - Freccia ↳ in colonna 'Cognome e Nome' allineata a destra
-    """
     df_html = g_disp.copy()
     note_col = "Indennità e note"
     if note_col in df_html.columns:
@@ -184,7 +178,6 @@ def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series, added_ma
     def _blue_if_added(row):
         return (["color:#0b5ed7"] * len(row)) if added_mask.loc[row.name] else ([""] * len(row))
 
-    # stile cella: se la colonna è "Cognome e Nome" e il valore è ↳, allinea a destra
     def _right_if_arrow(val):
         return "text-align: right;" if str(val).strip() == "↳" else ""
 
@@ -202,7 +195,6 @@ def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series, added_ma
            ], overwrite=False)
           )
     return f'<div class="serv-table-wrap">{sty.to_html(escape=False)}</div>'
-
 
 def render_preview(df_view: pd.DataFrame, meta: dict, inner_sort_choice: str):
     st.success(f"File elaborato. Data: {meta.get('data','?')} – {meta.get('giorno','?')} (fonte: {meta.get('origine','?')})")
@@ -229,7 +221,6 @@ def render_preview(df_view: pd.DataFrame, meta: dict, inner_sort_choice: str):
                 if "Cognome e Nome" in g.columns: by.append("Cognome e Nome")
                 if "Inizio" in g.columns:         by.append("Inizio")
                 if by: g = g.sort_values(by=by).reset_index(drop=True)
-                # --- qui: compattazione + simbolo ↳ sotto il nome per turni successivi
                 if {"Cognome e Nome", "Matricola"}.issubset(g.columns):
                     same_person = g[["Cognome e Nome", "Matricola"]].eq(
                         g[["Cognome e Nome", "Matricola"]].shift(1)
@@ -307,11 +298,9 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
             hidden  = before - len(df_view)
             if hidden > 0: st.info(f"Righe 'Assente' nascoste: {hidden}")
 
-        # Aggiungi eventuali trasferte inserite
         if not st.session_state["extra_rows"].empty:
             df_view = pd.concat([df_view, st.session_state["extra_rows"]], ignore_index=True)
 
-        # salva stato
         st.session_state["df_view"] = df_view
         st.session_state["meta"] = meta
         st.session_state["last_inner_sort"] = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
@@ -389,10 +378,10 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
 
     # --- Export PDF ---
     with tempfile.TemporaryDirectory() as td:
-        pdf_path   = Path(td) / "ServizioGiornaliero.pdf"
+        temp_dir = Path(td)
         inner_sort = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
-        build_pdf(
-            pdf_path,
+        pdf_path = build_pdf(
+            temp_dir,
             st.session_state["df_view"],
             st.session_state["meta"],
             logo_path if logo_path.exists() else None,
@@ -402,6 +391,6 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
         st.download_button(
             "⬇️ Scarica PDF",
             data=pdf_path.read_bytes(),
-            file_name="ServizioGiornaliero.pdf",
+            file_name=pdf_path.name,
             mime="application/pdf"
         )
