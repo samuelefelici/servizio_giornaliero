@@ -471,12 +471,16 @@ def build_pdf(
         if idx_fine is not None:
             base_style.append(("ALIGN", (idx_fine, 1), (idx_fine, -1), "CENTER"))
 
-        # Grassetto per trasferte (solo Turno/Inizio/Fine)
+        # Grassetto per trasferte (solo Nome/Turno/Inizio/Fine)
         for i, is_tr in enumerate(trasferte.tolist(), start=1):
             if is_tr:
                 for cidx in col_idx.values():
                     base_style.append(("FONTNAME", (cidx, i), (cidx, i), "Helvetica-Bold"))
                     base_style.append(("TEXTCOLOR", (cidx, i), (cidx, i), colors.HexColor("#0b5ed7")))
+                    # Colonna precedente (Cognome e Nome)
+                    if cidx > 0:
+                        base_style.append(("FONTNAME", (cidx-1, i), (cidx-1, i), "Helvetica-Bold"))
+                        base_style.append(("TEXTCOLOR", (cidx-1, i), (cidx-1, i), colors.HexColor("#0b5ed7")))
 
         # Righe aggiunte: testo blu sull'intera riga (plus grassetto già presente)
         for i in added_rows:
