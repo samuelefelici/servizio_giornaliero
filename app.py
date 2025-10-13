@@ -1,4 +1,11 @@
 # app.py
+"""
+Servizio Giornaliero - Applicazione Streamlit per elaborazione turni di servizio
+
+Questa applicazione elabora file Excel contenenti turni di servizio giornaliero,
+applicando filtri, normalizzazioni e trasformazioni automatiche.
+Supporta l'inserimento manuale di trasferte e genera output in formato Excel e PDF.
+"""
 import os, sys, re, io, tempfile
 from pathlib import Path
 from html import escape as html_escape
