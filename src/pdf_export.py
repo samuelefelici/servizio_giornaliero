@@ -434,6 +434,7 @@ def build_pdf(
         idx_inizio = col_idx.get("Inizio")
         idx_fine = col_idx.get("Fine")
         idx_nome = header.index("Cognome e Nome") if "Cognome e Nome" in header else None
+        idx_matricola = header.index("Matricola") if "Matricola" in header else None
 
         col_widths = _calc_col_widths(page_w)
 
@@ -463,9 +464,13 @@ def build_pdf(
         if idx_fine is not None:
             base_style.append(("ALIGN", (idx_fine, 1), (idx_fine, -1), "CENTER"))
 
-        # Grassetto/blu per trasferte automatiche (Nome/Turno/Inizio/Fine, solo se NON aggiunta manualmente)
+        # Grassetto/blu per trasferte automatiche (Matricola, Nome, Turno, Inizio, Fine, solo se NON aggiunta manualmente)
         for i, is_tr in enumerate(trasferte.tolist(), start=1):
             if is_tr and i not in added_rows:
+                # Colora Matricola
+                if idx_matricola is not None:
+                    base_style.append(("FONTNAME", (idx_matricola, i), (idx_matricola, i), "Helvetica-Bold"))
+                    base_style.append(("TEXTCOLOR", (idx_matricola, i), (idx_matricola, i), colors.HexColor("#0b5ed7")))
                 # Colora Nome
                 if idx_nome is not None:
                     base_style.append(("FONTNAME", (idx_nome, i), (idx_nome, i), "Helvetica-Bold"))
