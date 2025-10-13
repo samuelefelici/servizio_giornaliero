@@ -409,6 +409,7 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
             if is_tr:
                 for cidx in col_idx.values():
                     base_style.append(("FONTNAME", (cidx, i), (cidx, i), "Helvetica-Bold"))
+                    base_style.append(("TEXTCOLOR", (cidx, i), (cidx, i), colors.HexColor("#0b5ed7")))
 
         # Righe aggiunte: testo blu sull'intera riga (plus grassetto già presente)
         for i in added_rows:
