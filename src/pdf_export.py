@@ -39,6 +39,7 @@ MAX_LOGO_W = 60 * mm
 MAX_LOGO_H = 22.5 * mm
 
 ARROW_MARK = "↳"  # segnale usato nella colonna nome per “secondo turno”
+BLUE = colors.HexColor("#0b5ed7")  # colore testo per righe aggiunte (come anteprima)
 
 # ---------- Freccia vettoriale (no font) ----------
 class CornerArrow(Flowable):
@@ -47,24 +48,26 @@ class CornerArrow(Flowable):
     ancorata al margine destro della cella.
     """
     def __init__(self, cell_width: float, size: float = 3.5 * mm,
-                 stroke: float = 1.0, shift_left_mm: float = 0.0):
+                 stroke: float = 1.0, shift_left_mm: float = 0.0,
+                 stroke_color=colors.black):
         super().__init__()
         self.width = float(cell_width)          # la Table userà questa width
         self.height = float(size * 1.6)         # altezza sufficiente per la punta
         self._s = float(size)
         self._stroke = float(stroke)
         self._shift = float(shift_left_mm)      # offset verso sinistra
+        self._color = stroke_color
 
     def draw(self):
         c = self.canv
         s = self._s
         # ancoraggio vicino al bordo destro della cella
-        # aumenta self._shift per andare più a sinistra
         x0 = self.width - (s * 4.2 + self._shift)
         y0 = self.height * 0.55
 
         c.saveState()
         c.setLineWidth(self._stroke)
+        c.setStrokeColor(self._color)
 
         # segmento verticale
         c.line(x0, y0 - s, x0, y0)
@@ -83,10 +86,8 @@ def _as_rome(dt: datetime | None) -> datetime:
     """Rende dt in Europe/Rome. Se dt è naive, lo assume UTC."""
     if dt is None:
         return datetime.now(_TZ_ROMA)
-    # naive → assumo UTC
     if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
         return dt.replace(tzinfo=timezone.utc).astimezone(_TZ_ROMA)
-    # aware → converto a Rome
     return dt.astimezone(_TZ_ROMA)
 
 
@@ -156,25 +157,20 @@ def _header_table(title_para: Paragraph,
                   page_w: float,
                   export_text: str,
                   small_style: ParagraphStyle) -> Table:
-    # misura larghezza del testo (pt)
     font_name = getattr(small_style, "fontName", "Helvetica")
     font_size = getattr(small_style, "fontSize", 8)
     text_w    = stringWidth(export_text, font_name, font_size)
 
-    # colonna destra larga quanto serve (nota + un piccolo margine)
     right_w = max(MAX_LOGO_W, text_w + 4*mm)
 
-    # logo
     if logo_path and logo_path.exists():
         img = Image(str(logo_path))
         img._restrictSize(MAX_LOGO_W, MAX_LOGO_H)
     else:
         img = Spacer(MAX_LOGO_W, MAX_LOGO_H)
 
-    # nota a destra
     small_para = Paragraph(escape(export_text), small_style)
 
-    # colonna destra: logo centrato, nota a destra
     right_col = Table([[img], [small_para]], colWidths=[right_w])
     right_col.setStyle(TableStyle([
         ("ALIGN",  (0,0), (0,0), "CENTER"),
@@ -185,7 +181,6 @@ def _header_table(title_para: Paragraph,
         ("BOTTOMPADDING",(0,0), (-1,-1), 0),
     ]))
 
-    # riga header
     tbl = Table([[title_para, right_col]], colWidths=[page_w - right_w, right_w])
     tbl.setStyle(TableStyle([
         ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
@@ -215,7 +210,19 @@ def _collapse_repeats(gdf: pd.DataFrame,
         g.loc[dup_mask, "Cognome e Nome"] = ARROW_MARK
     return g
 
-def _table_data_for(df: pd.DataFrame, para_style: ParagraphStyle):
+def _table_data_for(
+    df: pd.DataFrame,
+    para_style: ParagraphStyle,
+    para_style_blue: ParagraphStyle | None = None,
+    rows_blue: set[int] | None = None,
+):
+    """
+    Converte df in dati per Table:
+    - applica DISPLAY_ORDER, rimuove 'Residenza'
+    - trasforma la colonna Note in Paragraph (wrapping, '*' -> <br/>)
+    - se la riga è in rows_blue e para_style_blue è fornito, la colonna Note usa lo stile blu
+    """
+    rows_blue = rows_blue or set()
     cols = [c for c in DISPLAY_ORDER if c in df.columns]
     dfp = df.copy()
     if cols:
@@ -225,14 +232,18 @@ def _table_data_for(df: pd.DataFrame, para_style: ParagraphStyle):
     header = list(dfp.columns)
     rows = dfp.fillna("").values.tolist()
 
-    if "Indennità e note" in header:
-        idx_note = header.index("Indennità e note")
-        for r in rows:
+    idx_note = header.index("Indennità e note") if "Indennità e note" in header else None
+    table_rows = [header]
+    for ridx, r in enumerate(rows, start=1):  # 1-based (per allinearsi agli indici della Table)
+        if idx_note is not None:
             txt = str(r[idx_note])
             txt = escape(txt).replace("*", "<br/>")
-            r[idx_note] = Paragraph(txt, para_style)
+            # Stile blu sulle righe segnate
+            style_to_use = para_style_blue if (para_style_blue and ridx in rows_blue) else para_style
+            r[idx_note] = Paragraph(txt, style_to_use)
+        table_rows.append(r)
 
-    return [header] + rows
+    return table_rows
 
 def _calc_col_widths(page_width: float) -> list[float]:
     w_matricola = 24 * mm
@@ -252,8 +263,7 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
     - Titolo a sinistra + logo a destra con nota in piccolo sotto il logo
     - Wrapping note con '*' -> newline forzato
     - Grassetto su Turno/Inizio/Fine per righe in trasferta (con eccezioni)
-    - Righe aggiunte (_added=True) in grassetto su tutta la riga
-    - Freccia per secondo turno disegnata come vettore e ancorata a destra
+    - Righe aggiunte (_added=True): testo blu su tutta la riga (incluse note e freccia)
     """
     # Margini/doc
     right = 10 * mm
@@ -292,6 +302,12 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
         leading=12,
         wordWrap="CJK",
     )
+    # Stile note blu (per righe aggiunte)
+    note_style_blue = ParagraphStyle(
+        "NoteBodyBlue",
+        parent=note_style,
+        textColor=BLUE,
+    )
     small_note_style = ParagraphStyle(
         "SmallExportNote",
         parent=styles["Normal"],
@@ -304,7 +320,7 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
 
     elems: list = []
 
-    # Normalizza l'orario a Europe/Rome (fix “-2 ore”)
+    # Orario Europe/Rome
     exported_at = _as_rome(exported_at)
     export_text = exported_at.strftime("servizio esportato il %d/%m/%Y alle %H:%M")
 
@@ -348,8 +364,11 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
 
         elems.append(Paragraph(res_name, group_style))
 
-        # Tabella dati
-        data = _table_data_for(gdf, note_style)
+        # Indici delle righe aggiunte (1-based, esclusa header)
+        added_rows = {i for i, v in enumerate(added_mask.tolist(), start=1) if v}
+
+        # Tabella dati (nota: per le righe blu, la colonna Note usa lo stile blu)
+        data = _table_data_for(gdf, note_style, para_style_blue=note_style_blue, rows_blue=added_rows)
         header = data[0]
 
         col_idx = {name: header.index(name) for name in ["Turno", "Inizio", "Fine"] if name in header}
@@ -359,15 +378,17 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
 
         col_widths = _calc_col_widths(page_w)
 
-        # Sostituisco i segnaposto ARROW_MARK con la freccia vettoriale
+        # Sostituisco i segnaposto ARROW_MARK con frecce vettoriali (blu se riga aggiunta)
         if idx_nome is not None:
             for ridx, row in enumerate(data[1:], start=1):
                 if str(row[idx_nome]).strip() == ARROW_MARK:
+                    stroke_col = BLUE if ridx in added_rows else colors.black
                     row[idx_nome] = CornerArrow(
                         cell_width=col_widths[idx_nome],
-                        size=1.5 * mm,        # dimensione freccia
-                        stroke=0.8,           # spessore linea
-                        shift_left_mm=2 * mm  # spostamento verso sinistra
+                        size=1.5 * mm,
+                        stroke=0.8,
+                        shift_left_mm=2 * mm,
+                        stroke_color=stroke_col
                     )
 
         tbl = Table(data, repeatRows=1, colWidths=col_widths)
@@ -389,10 +410,10 @@ def build_pdf(path_out: Path, df: pd.DataFrame, meta: dict,
                 for cidx in col_idx.values():
                     base_style.append(("FONTNAME", (cidx, i), (cidx, i), "Helvetica-Bold"))
 
-        # Grassetto per righe aggiunte (tutta la riga)
-        for i, is_added in enumerate(added_mask.tolist(), start=1):
-            if is_added:
-                base_style.append(("FONTNAME", (0, i), (-1, i), "Helvetica-Bold"))
+        # Righe aggiunte: testo blu sull'intera riga (plus grassetto già presente)
+        for i in added_rows:
+            base_style.append(("TEXTCOLOR", (0, i), (-1, i), BLUE))
+            base_style.append(("FONTNAME",  (0, i), (-1, i), "Helvetica-Bold"))
 
         tbl.setStyle(TableStyle(base_style))
         elems.append(tbl)
