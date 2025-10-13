@@ -1,4 +1,3 @@
-# src/pdf_export.py
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import (
     SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, Flowable
@@ -40,7 +39,6 @@ MAX_LOGO_H = 22.5 * mm
 
 ARROW_MARK = "↳"  # segnale usato nella colonna nome per “secondo turno”
 BLUE = colors.HexColor("#0b5ed7")  # colore testo per righe aggiunte (come anteprima)
-
 
 # ---------- Freccia vettoriale (no font) ----------
 class CornerArrow(Flowable):
@@ -317,12 +315,6 @@ def build_pdf(
         # Se path_out è un file, sostituisci il nome
         path_out = path_out.with_name(file_name)
 
-    """
-    - Titolo a sinistra + logo a destra con nota in piccolo sotto il logo
-    - Wrapping note con '*' -> newline forzato
-    - Grassetto su Turno/Inizio/Fine per righe in trasferta (con eccezioni)
-    - Righe aggiunte (_added=True): testo blu su tutta la riga (incluse note e freccia)
-    """
     # Margini/doc
     right = 10 * mm
     left = 10 * mm
@@ -471,16 +463,17 @@ def build_pdf(
         if idx_fine is not None:
             base_style.append(("ALIGN", (idx_fine, 1), (idx_fine, -1), "CENTER"))
 
-        # Grassetto per trasferte (solo Nome/Turno/Inizio/Fine)
+        # Grassetto/blu per trasferte automatiche (Nome/Turno/Inizio/Fine, solo se NON aggiunta manualmente)
         for i, is_tr in enumerate(trasferte.tolist(), start=1):
-            if is_tr:
+            if is_tr and i not in added_rows:
+                # Colora Nome
+                if idx_nome is not None:
+                    base_style.append(("FONTNAME", (idx_nome, i), (idx_nome, i), "Helvetica-Bold"))
+                    base_style.append(("TEXTCOLOR", (idx_nome, i), (idx_nome, i), colors.HexColor("#0b5ed7")))
+                # Colora Turno/Inizio/Fine
                 for cidx in col_idx.values():
                     base_style.append(("FONTNAME", (cidx, i), (cidx, i), "Helvetica-Bold"))
                     base_style.append(("TEXTCOLOR", (cidx, i), (cidx, i), colors.HexColor("#0b5ed7")))
-                    # Colonna precedente (Cognome e Nome)
-                    if cidx > 0:
-                        base_style.append(("FONTNAME", (cidx-1, i), (cidx-1, i), "Helvetica-Bold"))
-                        base_style.append(("TEXTCOLOR", (cidx-1, i), (cidx-1, i), colors.HexColor("#0b5ed7")))
 
         # Righe aggiunte: testo blu sull'intera riga (plus grassetto già presente)
         for i in added_rows:
