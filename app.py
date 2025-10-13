@@ -125,6 +125,10 @@ def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
         return pd.Series(False, index=df.index)
     return df.apply(lambda r: _should_highlight_turno(r.get("Residenza"), r.get("Turno")), axis=1)
 
+def _is_turno_numero(turno: str) -> bool:
+    t = str(turno).strip()
+    return bool(re.match(r"^\d{3}", t))  # Es: 510, 520 ecc.
+
 # ---------- supporto a trasferte inserite ----------
 _PREFIX_TO_RES = {
     "JU": "JESI URBANO", "J" : "JESI EXTRAURBANO", "M" : "MARINA",
@@ -168,23 +172,32 @@ def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series, added_ma
             df_html[note_col].astype(str).apply(lambda x: html_escape(x).replace("*", "<br/>"))
         )
 
-    subset_cols = [c for c in ["Turno", "Inizio", "Fine"] if c in df_html.columns]
+    style_cols = [c for c in ["Matricola", "Cognome e Nome", "Turno", "Inizio", "Fine"] if c in df_html.columns]
     if added_mask is None:
         added_mask = pd.Series(False, index=df_html.index)
 
-    def _bold_if_trasferta(row):
-        return (["font-weight: bold"] * len(row)) if trasferta_mask.loc[row.name] else ([""] * len(row))
-
-    def _blue_if_added(row):
-        return (["color:#0b5ed7"] * len(row)) if added_mask.loc[row.name] else ([""] * len(row))
+    def _custom_style(row):
+        # tutta la riga blu se aggiunta manualmente
+        if added_mask.loc[row.name]:
+            return ["color:#0b5ed7;font-weight:bold"] * len(row)
+        # tutta la riga grassetto se turno inizia con un numero (510, 520, ecc.)
+        elif _is_turno_numero(row.get("Turno", "")):
+            return ["font-weight:bold"] * len(row)
+        # trasferte automatiche: blu+grassetto su matricola, nome, turno, inizio, fine
+        elif trasferta_mask.loc[row.name]:
+            return [
+                "color:#0b5ed7;font-weight:bold" if col in style_cols else "" 
+                for col in row.index
+            ]
+        else:
+            return [""] * len(row)
 
     def _right_if_arrow(val):
         return "text-align: right;" if str(val).strip() == "↳" else ""
 
     sty = (df_html.style
            .hide(axis="index")
-           .apply(_blue_if_added, axis=1)
-           .apply(_bold_if_trasferta, axis=1, subset=subset_cols)
+           .apply(_custom_style, axis=1)
            .applymap(_right_if_arrow, subset=["Cognome e Nome"] if "Cognome e Nome" in df_html.columns else None)
            .set_table_styles([
                {"selector": "table", "props": [("width","100%"), ("table-layout","fixed"), ("border-collapse","collapse")]},
