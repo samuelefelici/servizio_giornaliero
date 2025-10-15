@@ -391,7 +391,7 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
             # Sostituisci la parte di import da file trasferte con questa:
             if file_import is not None:
                 try:
-                    df_import = pd.read_csv(file_import, sep='\t', header=0, encoding='latin1')
+                    df_import = pd.read_csv(file_import, sep='\t', header=0, encoding='cp1252')
                     st.write("Colonne importate:", df_import.columns.tolist())
                     preview_rows = []
                     for _, row in df_import.iterrows():
