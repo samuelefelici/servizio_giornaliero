@@ -1,5 +1,6 @@
 import os, sys, re, io, tempfile
 from pathlib import Path
+from html import escape as html_escape
 from datetime import datetime, timedelta
 
 # --- Path per import locali ---
@@ -9,6 +10,15 @@ if str(ROOT) not in sys.path:
 
 import streamlit as st
 import pandas as pd
+
+REST_CODES = {"R", "RR"}   # riposo
+
+# Eccezioni GLOBALI
+GLOBAL_EXC_PATTERNS = (r"^IAST$", r"^N$",)
+
+# Prefissi eccezioni ANCONA
+EXC_ANCONA_PREFIXES = ("D1R1","D1R2","D1R5","D2R1","D2R2","D2R3","D2R6","NP","ASC","V5","LU","MA","ME","GI","VE","SA","DO")
+EXC_ANCONA_PATTERNS  = tuple(rf"^{re.escape(p)}" for p in EXC_ANCONA_PREFIXES)
 
 # --- Import moduli del progetto ---
 try:
@@ -25,10 +35,19 @@ except Exception as e:
 # --- Config pagina ---
 st.set_page_config(page_title="Servizio Giornaliero", layout="wide")
 
-# CSS (solo layout, nessuna colorazione speciale sulle celle)
+# CSS
 st.markdown("""
 <style>
 .block-container {max-width: 100% !important; padding-left: 16px; padding-right: 16px;}
+.serv-table-wrap {width: 100%;}
+.serv-table-wrap table {width: 100% !important; table-layout: fixed; border-collapse: collapse;}
+.serv-table-wrap th {background:#f5f5f5; text-align:left; padding:6px;}
+.serv-table-wrap td {padding:6px; vertical-align: top;}
+.serv-table-wrap th:nth-child(4), .serv-table-wrap td:nth-child(4),
+.serv-table-wrap th:nth-child(5), .serv-table-wrap td:nth-child(5) {text-align:center;}
+.serv-table-wrap th:nth-child(6), .serv-table-wrap td:nth-child(6) {
+  width: 40%; white-space: normal; word-break: break-word;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -50,16 +69,79 @@ st.session_state.setdefault("extra_rows", pd.DataFrame(columns=[
 
 # ====================== Helper ======================
 
+def _reorder_for_display(df: pd.DataFrame) -> pd.DataFrame:
+    df2  = df.drop(columns=["Residenza"], errors="ignore").copy()
+    cols = [c for c in DISPLAY_ORDER if c in df2.columns]
+    return df2[cols] if cols else df2
+
+def _res_to_prefix(res: str) -> str | None:
+    if not isinstance(res, str): return None
+    r = res.upper().replace("_", " ").strip()
+    if "JESI URBANO" in r or r == "JU": return "JU"
+    if "JESI" in r or r == "J":        return "J"
+    if "MARINA" in r or r == "M":      return "M"
+    if "CASTELFIDARDO" in r or "C.FID" in r or r == "C": return "C"
+    if "OSIMO" in r or r == "O":       return "O"
+    if "FILOTTRANO" in r or "FILOT" in r or r == "F":    return "F"
+    if "POLVERIGI" in r or r == "P":   return "P"
+    if "OSTRA" in r or r == "D":       return "D"
+    if "BELVED" in r or r == "B" or "DEPBELVE" in r:     return "B"
+    if "ANCONA" in r or r == "A":      return "A"
+    return None
+
+def _norm_turno(s) -> str:
+    return str(s or "").upper().strip().replace(".", "").replace(" ", "")
+
+def _match_any(token: str, patterns: tuple[str, ...]) -> bool:
+    t = _norm_turno(token)
+    return any(re.match(p, t) for p in patterns)
+
+def _turno_bucket(turno: str) -> str | None:
+    t = _norm_turno(turno)
+    if not t or t in {"ASSENTE", *REST_CODES}: return None
+    if t.startswith("JU"): return "JU"
+    if t.startswith("J"):  return "J"
+    return t[0]
+
+def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
+    if prefix in {"J", "JU"}: return {"J", "JU"}
+    return {prefix} if prefix else set()
+
+def _should_highlight_turno(residenza, turno) -> bool:
+    t = _norm_turno(turno)
+    if not t or t in {"ASSENTE", *REST_CODES}: return False
+    if _match_any(t, GLOBAL_EXC_PATTERNS): return False
+    rp = _res_to_prefix(residenza)
+    if rp == "A":
+        if _match_any(t, EXC_ANCONA_PATTERNS): return False
+    if t.startswith("JU"): b = "JU"
+    elif t.startswith("J"): b = "J"
+    else: b = t[0] if t else None
+    if not rp or not b: return False
+    return b not in _accepted_prefixes_for_res(rp)
+
+def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
+    if "Residenza" not in df.columns or "Turno" not in df.columns:
+        return pd.Series(False, index=df.index)
+    return df.apply(lambda r: _should_highlight_turno(r.get("Residenza"), r.get("Turno")), axis=1)
+
+def _is_turno_numero(turno: str) -> bool:
+    t = str(turno).strip()
+    return bool(re.match(r"^\d{3}", t))  # Es: 510, 520 ecc.
+
+# ---------- supporto a trasferte inserite ----------
+_PREFIX_TO_RES = {
+    "JU": "JESI URBANO", "J" : "JESI EXTRAURBANO", "M" : "MARINA",
+    "C" : "CASTELFIDARDO","O" : "OSIMO","F" : "FILOTTRANO","P" : "POLVERIGI",
+    "D" : "OSTRA","B" : "BELVEDERE","A" : "ANCONA",
+}
+
 def _turno_to_residenza_name(turno: str) -> str | None:
-    t = str(turno or "").upper().strip().replace(".", "").replace(" ", "")
-    prefix_to_res = {
-        "JU": "JESI URBANO", "J": "JESI EXTRAURBANO", "M": "MARINA",
-        "C": "CASTELFIDARDO", "O": "OSIMO", "F": "FILOTTRANO", "P": "POLVERIGI",
-        "D": "OSTRA", "B": "BELVEDERE", "A": "ANCONA",
-    }
-    if t.startswith("JU"): return prefix_to_res["JU"]
-    if t.startswith("J"):  return prefix_to_res["J"]
-    return prefix_to_res.get(t[:1])
+    t = _norm_turno(turno)
+    if not t: return None
+    if t.startswith("JU"): return _PREFIX_TO_RES["JU"]
+    if t.startswith("J"):  return _PREFIX_TO_RES["J"]
+    return _PREFIX_TO_RES.get(t[0])
 
 def _parse_time_like(s: str | None) -> str:
     s = (s or "").strip()
@@ -81,6 +163,102 @@ def _build_extra_df(rows: list[dict]) -> pd.DataFrame:
     df["_added"] = True
     keep = ["Matricola","Cognome e Nome","Turno","Inizio","Fine","Indennità e note","Residenza","_added"]
     return df[keep]
+
+def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series, added_mask: pd.Series | None = None) -> str:
+    df_html = g_disp.copy()
+    note_col = "Indennità e note"
+    if note_col in df_html.columns:
+        df_html[note_col] = (
+            df_html[note_col].astype(str).apply(lambda x: html_escape(x).replace("*", "<br/>"))
+        )
+
+    style_cols = [c for c in ["Matricola", "Cognome e Nome", "Turno", "Inizio", "Fine"] if c in df_html.columns]
+    if added_mask is None:
+        added_mask = pd.Series(False, index=df_html.index)
+
+    def _custom_style(row):
+        # tutta la riga blu se aggiunta manualmente
+        if added_mask.loc[row.name]:
+            return ["color:#0b5ed7;font-weight:bold"] * len(row)
+        # tutta la riga grassetto se turno inizia con un numero (510, 520, ecc.)
+        elif _is_turno_numero(row.get("Turno", "")):
+            return ["font-weight:bold"] * len(row)
+        # trasferte automatiche: blu+grassetto su matricola, nome, turno, inizio, fine
+        elif trasferta_mask.loc[row.name]:
+            return [
+                "color:#0b5ed7;font-weight:bold" if col in style_cols else "" 
+                for col in row.index
+            ]
+        else:
+            return [""] * len(row)
+
+    def _right_if_arrow(val):
+        return "text-align: right;" if str(val).strip() == "↳" else ""
+
+    sty = (df_html.style
+           .hide(axis="index")
+           .apply(_custom_style, axis=1)
+           .applymap(_right_if_arrow, subset=["Cognome e Nome"] if "Cognome e Nome" in df_html.columns else None)
+           .set_table_styles([
+               {"selector": "table", "props": [("width","100%"), ("table-layout","fixed"), ("border-collapse","collapse")]},
+               {"selector": "th",    "props": [("background","#f5f5f5"), ("text-align","left"), ("padding","6px")]},
+               {"selector": "td",    "props": [("padding","6px"), ("vertical-align","top")]},
+               {"selector": "th:nth-child(4), td:nth-child(4), th:nth-child(5), td:nth-child(5)", "props": [("text-align","center")]},
+               {"selector": "th:nth-child(6), td:nth-child(6)", "props": [("width","40%"), ("white-space","normal"), ("word-break","break-word")]}
+           ], overwrite=False)
+          )
+    return f'<div class="serv-table-wrap">{sty.to_html(escape=False)}</div>'
+
+def render_preview(df_view: pd.DataFrame, meta: dict, inner_sort_choice: str):
+    st.success(f"File elaborato. Data: {meta.get('data','?')} – {meta.get('giorno','?')} (fonte: {meta.get('origine','?')})")
+    st.markdown(
+        f"""
+        <h2 style="color:#d00; font-weight:800; margin: 0.5rem 0 0.5rem 0; text-align:center;">
+          Servizio Giornaliero: {meta.get('giorno','')} {meta.get('data','')}
+        </h2>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.subheader("Anteprima per deposito")
+
+    if "Residenza" in df_view.columns:
+        res_list = sorted(df_view["Residenza"].dropna().astype(str).unique())
+        for res in res_list:
+            g = df_view[df_view["Residenza"].astype(str) == res].copy()
+            if g.empty: continue
+            if inner_sort_choice.startswith("Inizio") and "Inizio" in g.columns:
+                by = ["Inizio"] + (["Cognome e Nome"] if "Cognome e Nome" in g.columns else [])
+                g = g.sort_values(by=by).reset_index(drop=True)
+            else:
+                by = []
+                if "Cognome e Nome" in g.columns: by.append("Cognome e Nome")
+                if "Inizio" in g.columns:         by.append("Inizio")
+                if by: g = g.sort_values(by=by).reset_index(drop=True)
+                if {"Cognome e Nome", "Matricola"}.issubset(g.columns):
+                    same_person = g[["Cognome e Nome", "Matricola"]].eq(
+                        g[["Cognome e Nome", "Matricola"]].shift(1)
+                    ).all(axis=1)
+                    g.loc[same_person, "Cognome e Nome"] = "↳"
+                    g.loc[same_person, "Matricola"] = ""
+
+            st.markdown(f"<h3 style='text-align:center; margin: 0.5rem 0 0.25rem 0;'>{res}</h3>", unsafe_allow_html=True)
+            g_disp = _reorder_for_display(g)
+            mask   = _trasferta_mask(g)
+            added_mask = g["_added"].fillna(False) if "_added" in g.columns else pd.Series(False, index=g.index)
+            html   = _styled_html_table(g_disp, mask, added_mask)
+            st.markdown(html, unsafe_allow_html=True)
+    else:
+        st.markdown("### **TUTTI**")
+        g = df_view.copy()
+        if {"Cognome e Nome", "Matricola"}.issubset(g.columns):
+            same_person = g[["Cognome e Nome", "Matricola"]].eq(g[["Cognome e Nome", "Matricola"]].shift(1)).all(axis=1)
+            g.loc[same_person, "Cognome e Nome"] = "↳"
+            g.loc[same_person, "Matricola"] = ""
+        g_disp = _reorder_for_display(g)
+        mask   = _trasferta_mask(g)
+        added_mask = g["_added"].fillna(False) if "_added" in g.columns else pd.Series(False, index=g.index)
+        html   = _styled_html_table(g_disp, mask, added_mask)
+        st.markdown(html, unsafe_allow_html=True)
 
 def _do_rerun():
     fn = getattr(st, "rerun", None)
@@ -145,90 +323,14 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
         st.error(f"Errore durante l'elaborazione: {e}")
         st.code("".join(traceback.format_exception(*sys.exc_info())))
 
-# ====================== Trasferte + Anteprima Editabile + Export ======================
+# ====================== Trasferte + Preview + Export ======================
 
 if st.session_state["df_view"] is not None and st.session_state["meta"] is not None:
-    df_view = st.session_state["df_view"]
-
     c1, c2 = st.columns([1,3])
     with c1:
         if st.button("➕ Inserisci trasferte", use_container_width=True):
             st.session_state["show_transfer_ui"] = not st.session_state["show_transfer_ui"]
 
-    # ---- ANTEPRIMA EDITABILE (NO COLORAZIONE) ----
-    st.markdown("### Modifica trasferte e note direttamente nella tabella sottostante")
-
-    mask_manual = df_view.get("_added", False)
-    df_manual = df_view[mask_manual].copy()
-    df_original = df_view[~mask_manual].copy()
-
-    columns_all = ["Matricola","Cognome e Nome","Turno","Inizio","Fine","Indennità e note","Residenza"]
-
-    # Tabella editabile per trasferte manuali (tutte le colonne)
-    edited_manual = None
-    if not df_manual.empty:
-        st.markdown("#### Trasferte manuali (tutte le colonne editabili)")
-        editable_manual = df_manual[columns_all].copy()
-        edited_manual = st.data_editor(
-            editable_manual,
-            num_rows="fixed",
-            use_container_width=True,
-            key="edit_manual_rows"
-        )
-
-    # Tabella editabile per servizio da file (solo note)
-    edited_original = None
-    if not df_original.empty and "Indennità e note" in df_original.columns:
-        st.markdown("#### Servizio da file (solo colonna 'Indennità e note' editabile)")
-        editable_notes = df_original[["Indennità e note"]].copy()
-        edited_original = st.data_editor(
-            editable_notes,
-            num_rows="fixed",
-            use_container_width=True,
-            key="edit_original_notes"
-        )
-
-    col_mod1, col_mod2 = st.columns([1,1])
-    with col_mod1:
-        if st.button("💾 Salva modifiche tabella", use_container_width=True):
-            # Aggiorna trasferte manuali
-            extra_df = pd.DataFrame()
-            if edited_manual is not None:
-                extra_df = edited_manual.copy()
-                for c in columns_all:
-                    if c not in extra_df.columns:
-                        extra_df[c] = ""
-                extra_df["Residenza"] = extra_df.apply(
-                    lambda r: r["Residenza"] or (_turno_to_residenza_name(r["Turno"]) or ""),
-                    axis=1
-                )
-                extra_df["Inizio"] = extra_df["Inizio"].map(_parse_time_like)
-                extra_df["Fine"] = extra_df["Fine"].map(_parse_time_like)
-                extra_df["_added"] = True
-                st.session_state["extra_rows"] = extra_df
-
-            # Aggiorna solo la colonna note per le righe originali
-            df_original_new = df_original.copy()
-            if edited_original is not None:
-                df_original_new["Indennità e note"] = edited_original["Indennità e note"]
-
-            # Aggiorna il DataFrame principale
-            st.session_state["df_view"] = pd.concat([df_original_new, st.session_state["extra_rows"]], ignore_index=True)
-            st.success("Modifiche salvate!")
-            _do_rerun()
-
-    with col_mod2:
-        if not st.session_state["extra_rows"].empty:
-            if st.button("🗑️ Svuota trasferte aggiunte", use_container_width=True):
-                st.session_state["extra_rows"] = st.session_state["extra_rows"].iloc[0:0]
-                base = st.session_state["df_view"]
-                if "_added" in base.columns:
-                    base = base[~base["_added"].fillna(False)].copy()
-                st.session_state["df_view"] = base
-                st.info("Trasferte cancellate.")
-                _do_rerun()
-
-    # --- UI per aggiunta nuove trasferte ---
     if st.session_state["show_transfer_ui"]:
         st.markdown("### Inserisci trasferte")
         st.caption("Compila le righe (max 30). Obbligatori: Matricola, Cognome e Nome, Turno.")
@@ -271,11 +373,13 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
                     st.info("Trasferte cancellate.")
                     _do_rerun()
 
+    # ---- Anteprima
+    render_preview(st.session_state["df_view"], st.session_state["meta"], inner_sort_choice)
+
     # --- Export Excel ---
     xls_buf = io.BytesIO()
     with pd.ExcelWriter(xls_buf, engine="openpyxl") as writer:
-        cols = [c for c in DISPLAY_ORDER if c in st.session_state["df_view"].columns]
-        st.session_state["df_view"][cols].to_excel(
+        _reorder_for_display(st.session_state["df_view"]).to_excel(
             writer, sheet_name="ServizioGiornaliero", index=False
         )
     st.download_button(
