@@ -387,15 +387,18 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
             st.caption("Importa trasferte da file XLS/XLSX. Prende solo Matricola (col.2), Nome (col.3), Turno (col.5)")
             file_import = st.file_uploader("Scegli file trasferte", type=["xls","xlsx"], key="upl_transfer_xls")
             preview_rows = []
+            # Sostituisci la parte di import da file trasferte con questa:
             if file_import is not None:
                 try:
-                    df_import = pd.read_excel(file_import, header=0)
-                    # Prendi solo le colonne richieste (Matricola=2, Nome=3, Turno=5, cioè index 1,2,4)
+                    # Usa lo stesso parser del file principale!
+                    df_import, _ = read_input_excel(file_import)
+                    # Prendi solo le colonne che servono (se esistono)
+                    preview_rows = []
                     for _, row in df_import.iterrows():
                         preview_rows.append({
-                            "Matricola": row.iloc[1],
-                            "Cognome e Nome": row.iloc[2],
-                            "Turno": row.iloc[4],
+                            "Matricola": row.get("Matricola", ""),
+                            "Cognome e Nome": row.get("Cognome e Nome", ""),
+                            "Turno": row.get("Turno", ""),
                             "Inizio": "",
                             "Fine": "",
                             "Indennità e note": "",
