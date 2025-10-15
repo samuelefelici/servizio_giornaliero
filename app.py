@@ -386,7 +386,7 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
             st.session_state["meta"],
             logo_path if logo_path.exists() else None,
             title=TITLE, inner_sort=inner_sort,
-            exported_at=datetime.now() + timedelta(hours=2)
+            exported_at=datetime.now()
         )
         st.download_button(
             "⬇️ Scarica PDF",
