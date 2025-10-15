@@ -329,49 +329,118 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
     c1, c2 = st.columns([1,3])
     with c1:
         if st.button("➕ Inserisci trasferte", use_container_width=True):
-            st.session_state["show_transfer_ui"] = not st.session_state["show_transfer_ui"]
+            st.session_state["show_transfer_ui"] = True
+            st.session_state["transfer_mode"] = None
+            _do_rerun()
 
-    if st.session_state["show_transfer_ui"]:
+    if st.session_state.get("show_transfer_ui", False):
         st.markdown("### Inserisci trasferte")
-        st.caption("Compila le righe (max 30). Obbligatori: Matricola, Cognome e Nome, Turno.")
+        # Scegli il metodo solo se non è già selezionato
+        if st.session_state.get("transfer_mode") is None:
+            colm, colf = st.columns(2)
+            with colm:
+                if st.button("Manuale"):
+                    st.session_state["transfer_mode"] = "manuale"
+                    _do_rerun()
+            with colf:
+                if st.button("Da File"):
+                    st.session_state["transfer_mode"] = "file"
+                    _do_rerun()
 
-        start_rows = 5
-        default_rows = pd.DataFrame(
-            [{"Matricola":"","Cognome e Nome":"","Turno":"","Inizio":"","Fine":""} for _ in range(start_rows)]
-        )
-        grid = st.data_editor(default_rows, num_rows="dynamic", use_container_width=True, key="manual_grid")
-
-        col_btn1, col_btn2 = st.columns([1,1])
-        with col_btn1:
-            if st.button("✅ Conferma trasferte", use_container_width=True):
-                rows = grid.replace({pd.NA:"", None:""}).to_dict("records")
-                rows = [r for r in rows if any(str(v).strip() for v in r.values())]
-                if len(rows) > 30:
-                    rows = rows[:30]
-                    st.info("Sono state prese solo le prime 30 righe.")
-                bad = [r for r in rows if not (str(r.get("Matricola")).strip()
-                                               and str(r.get("Cognome e Nome")).strip()
-                                               and str(r.get("Turno")).strip())]
-                if bad:
-                    st.error("Compila Matricola, Cognome e Nome e Turno per ogni riga non vuota.")
-                else:
-                    extra_df = _build_extra_df(rows)
-                    st.session_state["extra_rows"] = pd.concat([st.session_state["extra_rows"], extra_df], ignore_index=True)
-                    st.session_state["df_view"] = pd.concat([st.session_state["df_view"], extra_df], ignore_index=True)
+        # --- MODALITA' MANUALE ---
+        elif st.session_state["transfer_mode"] == "manuale":
+            st.caption("Compila le righe (max 30). Obbligatori: Matricola, Cognome e Nome, Turno.")
+            start_rows = 5
+            default_rows = pd.DataFrame(
+                [{"Matricola":"","Cognome e Nome":"","Turno":"","Inizio":"","Fine":""} for _ in range(start_rows)]
+            )
+            grid = st.data_editor(default_rows, num_rows="dynamic", use_container_width=True, key="manual_grid")
+            col_btn1, col_btn2 = st.columns([1,1])
+            with col_btn1:
+                if st.button("✅ Conferma trasferte", use_container_width=True):
+                    rows = grid.replace({pd.NA:"", None:""}).to_dict("records")
+                    rows = [r for r in rows if any(str(v).strip() for v in r.values())]
+                    if len(rows) > 30:
+                        rows = rows[:30]
+                        st.info("Sono state prese solo le prime 30 righe.")
+                    bad = [r for r in rows if not (str(r.get("Matricola")).strip()
+                                                   and str(r.get("Cognome e Nome")).strip()
+                                                   and str(r.get("Turno")).strip())]
+                    if bad:
+                        st.error("Compila Matricola, Cognome e Nome e Turno per ogni riga non vuota.")
+                    else:
+                        extra_df = _build_extra_df(rows)
+                        st.session_state["extra_rows"] = pd.concat([st.session_state["extra_rows"], extra_df], ignore_index=True)
+                        st.session_state["df_view"] = pd.concat([st.session_state["df_view"], extra_df], ignore_index=True)
+                        st.session_state["show_transfer_ui"] = False
+                        st.session_state["transfer_mode"] = None
+                        st.success(f"Inserite {len(extra_df)} trasferte.")
+                        _do_rerun()
+            with col_btn2:
+                if st.button("Annulla", use_container_width=True):
                     st.session_state["show_transfer_ui"] = False
-                    st.success(f"Inserite {len(extra_df)} trasferte.")
+                    st.session_state["transfer_mode"] = None
                     _do_rerun()
 
-        with col_btn2:
-            if not st.session_state["extra_rows"].empty:
-                if st.button("🗑️ Svuota trasferte aggiunte", use_container_width=True):
-                    st.session_state["extra_rows"] = st.session_state["extra_rows"].iloc[0:0]
-                    base = st.session_state["df_view"]
-                    if "_added" in base.columns:
-                        base = base[~base["_added"].fillna(False)].copy()
-                    st.session_state["df_view"] = base
-                    st.info("Trasferte cancellate.")
+        # --- MODALITA' DA FILE ---
+        elif st.session_state["transfer_mode"] == "file":
+            st.caption("Importa trasferte da file XLS/XLSX. Prende solo Matricola (col.2), Nome (col.3), Turno (col.5)")
+            file_import = st.file_uploader("Scegli file trasferte", type=["xls","xlsx"], key="upl_transfer_xls")
+            preview_rows = []
+            if file_import is not None:
+                try:
+                    df_import = pd.read_excel(file_import, header=0)
+                    # Prendi solo le colonne richieste (Matricola=2, Nome=3, Turno=5, cioè index 1,2,4)
+                    for _, row in df_import.iterrows():
+                        preview_rows.append({
+                            "Matricola": row.iloc[1],
+                            "Cognome e Nome": row.iloc[2],
+                            "Turno": row.iloc[4],
+                            "Inizio": "",
+                            "Fine": "",
+                            "Indennità e note": "",
+                            "Residenza": "",
+                        })
+                    st.success(f"Trasferte importate dal file: {len(preview_rows)}")
+                except Exception as e:
+                    st.error(f"Errore import: {e}")
+            # Tabella editabile delle trasferte importate
+            df_preview = pd.DataFrame(preview_rows or [{"Matricola":"","Cognome e Nome":"","Turno":"","Inizio":"","Fine":""}])
+            grid = st.data_editor(df_preview, num_rows="dynamic", use_container_width=True, key="file_grid")
+            col_btn1, col_btn2 = st.columns([1,1])
+            with col_btn1:
+                if st.button("✅ Conferma trasferte importate", use_container_width=True):
+                    rows = grid.replace({pd.NA:"", None:""}).to_dict("records")
+                    rows = [r for r in rows if any(str(v).strip() for v in r.values())]
+                    bad = [r for r in rows if not (str(r.get("Matricola")).strip()
+                                                   and str(r.get("Cognome e Nome")).strip()
+                                                   and str(r.get("Turno")).strip())]
+                    if bad:
+                        st.error("Compila Matricola, Cognome e Nome e Turno per ogni riga non vuota.")
+                    else:
+                        extra_df = _build_extra_df(rows)
+                        st.session_state["extra_rows"] = pd.concat([st.session_state["extra_rows"], extra_df], ignore_index=True)
+                        st.session_state["df_view"] = pd.concat([st.session_state["df_view"], extra_df], ignore_index=True)
+                        st.session_state["show_transfer_ui"] = False
+                        st.session_state["transfer_mode"] = None
+                        st.success(f"Inserite {len(extra_df)} trasferte dal file.")
+                        _do_rerun()
+            with col_btn2:
+                if st.button("Annulla", use_container_width=True):
+                    st.session_state["show_transfer_ui"] = False
+                    st.session_state["transfer_mode"] = None
                     _do_rerun()
+
+    # Svuota trasferte
+    if not st.session_state["extra_rows"].empty:
+        if st.button("🗑️ Svuota trasferte aggiunte", use_container_width=True):
+            st.session_state["extra_rows"] = st.session_state["extra_rows"].iloc[0:0]
+            base = st.session_state["df_view"]
+            if "_added" in base.columns:
+                base = base[~base["_added"].fillna(False)].copy()
+            st.session_state["df_view"] = base
+            st.info("Trasferte cancellate.")
+            _do_rerun()
 
     # ---- Anteprima
     render_preview(st.session_state["df_view"], st.session_state["meta"], inner_sort_choice)
