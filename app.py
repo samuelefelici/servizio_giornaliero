@@ -397,8 +397,8 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
                     for _, row in df_import.iterrows():
                         preview_rows.append({
                             "Matricola": row.get("Matricola", ""),
-                            "Cognome e Nome": row.get("Nominativo", ""),
-                            "Turno": row.get("Turno fuori residenza", ""),
+                            "Nominativo": row.get("Nominativo", ""),
+                            "Turno fuori residenza": row.get("Turno fuori residenza", ""),
                             "Inizio": "",
                             "Fine": "",
                             "Indennità e note": "",
