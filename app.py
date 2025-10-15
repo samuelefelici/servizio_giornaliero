@@ -391,15 +391,14 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
             # Sostituisci la parte di import da file trasferte con questa:
             if file_import is not None:
                 try:
-                    # Usa lo stesso parser del file principale!
-                    df_import, _ = pd.read_excel(file_import, header=None, engine="xlrd")
-                    # Prendi solo le colonne che servono (se esistono)
+                    df_import = pd.read_csv(file_import, sep='\t', header=0)
+                    st.write("Colonne importate:", df_import.columns.tolist())
                     preview_rows = []
                     for _, row in df_import.iterrows():
                         preview_rows.append({
-                            "Matricola": row.iloc[1],               # colonna 2
-                            "Nominativo": row.iloc[2],              # colonna 3
-                            "Turno fuori residenza": row.iloc[4],   # colonna 5
+                            "Matricola": row["Matricola"],
+                            "Nominativo": row["Nominativo"],
+                            "Turno fuori residenza": row["Turno fuori residenza"],
                             "Inizio": "",
                             "Fine": "",
                             "Indennità e note": "",
