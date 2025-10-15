@@ -2,6 +2,7 @@ import os, sys, re, io, tempfile
 from pathlib import Path
 from html import escape as html_escape
 from datetime import datetime, timedelta
+import pandas as pd
 
 # --- Path per import locali ---
 ROOT = Path(__file__).resolve().parent
@@ -391,14 +392,14 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
             if file_import is not None:
                 try:
                     # Usa lo stesso parser del file principale!
-                    df_import, _ = read_input_excel(file_import)
+                    df_import, _ = pd.read_excel(file_import, header=None)
                     # Prendi solo le colonne che servono (se esistono)
                     preview_rows = []
                     for _, row in df_import.iterrows():
                         preview_rows.append({
-                            "Matricola": row.get("Matricola", ""),
-                            "Nominativo": row.get("Nominativo", ""),
-                            "Turno fuori residenza": row.get("Turno fuori residenza", ""),
+                            "Matricola": row.iloc[1],               # colonna 2
+                            "Nominativo": row.iloc[2],              # colonna 3
+                            "Turno fuori residenza": row.iloc[4],   # colonna 5
                             "Inizio": "",
                             "Fine": "",
                             "Indennità e note": "",
