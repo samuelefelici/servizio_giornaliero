@@ -287,17 +287,10 @@ debug_mode = st.checkbox("🧪 Modalità debug", value=False,
 
 # ====================== Azione: ELABORA ======================
 
-# ====================== Azione: ELABORA ======================
-
 if st.button("▶️ Elabora", type="primary", use_container_width=True):
-    # ... tutta la tua logica di elaborazione ...
-    st.session_state["df_view"] = df_view
-    st.session_state["meta"] = meta
-    st.session_state["last_inner_sort"] = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
-
-    # MOSTRA SUBITO L'ANTEPRIMA
-    st.write("Anteprima servizio giornaliero:")
-    st.dataframe(st.session_state["df_view"])
+    if not uploaded:
+        st.warning("Carica prima un file.")
+        st.stop()
 
     if debug_mode:
         try:
@@ -380,6 +373,21 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
                     st.info("Trasferte cancellate.")
                     _do_rerun()
 
+    # ---- Anteprima
+    render_preview(st.session_state["df_view"], st.session_state["meta"], inner_sort_choice)
+
+    # --- Export Excel ---
+    xls_buf = io.BytesIO()
+    with pd.ExcelWriter(xls_buf, engine="openpyxl") as writer:
+        _reorder_for_display(st.session_state["df_view"]).to_excel(
+            writer, sheet_name="ServizioGiornaliero", index=False
+        )
+    st.download_button(
+        "⬇️ Scarica Excel",
+        data=xls_buf.getvalue(),
+        file_name="ServizioGiornaliero.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
     # --- Export PDF ---
     with tempfile.TemporaryDirectory() as td:
@@ -391,7 +399,7 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
             st.session_state["meta"],
             logo_path if logo_path.exists() else None,
             title=TITLE, inner_sort=inner_sort,
-            exported_at=datetime.now()
+            exported_at=datetime.now() + timedelta(hours=2)
         )
         st.download_button(
             "⬇️ Scarica PDF",
