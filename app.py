@@ -287,10 +287,17 @@ debug_mode = st.checkbox("🧪 Modalità debug", value=False,
 
 # ====================== Azione: ELABORA ======================
 
+# ====================== Azione: ELABORA ======================
+
 if st.button("▶️ Elabora", type="primary", use_container_width=True):
-    if not uploaded:
-        st.warning("Carica prima un file.")
-        st.stop()
+    # ... tutta la tua logica di elaborazione ...
+    st.session_state["df_view"] = df_view
+    st.session_state["meta"] = meta
+    st.session_state["last_inner_sort"] = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
+
+    # MOSTRA SUBITO L'ANTEPRIMA
+    st.write("Anteprima servizio giornaliero:")
+    st.dataframe(st.session_state["df_view"])
 
     if debug_mode:
         try:
