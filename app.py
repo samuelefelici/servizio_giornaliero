@@ -397,8 +397,8 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
                     for _, row in df_import.iterrows():
                         preview_rows.append({
                             "Matricola": row.get("Matricola", ""),
-                            "Cognome e Nome": row.get("Nominativo", ""),
-                            "Turno": row.get("Turno fuori residenza", ""),
+                            "Nominativo": row.get("Nominativo", ""),
+                            "Turno fuori residenza": row.get("Turno fuori residenza", ""),
                             "Inizio": "",
                             "Fine": "",
                             "Indennità e note": "",
@@ -408,7 +408,7 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
                 except Exception as e:
                     st.error(f"Errore import: {e}")
             # Tabella editabile delle trasferte importate
-            df_preview = pd.DataFrame(preview_rows or [{"Matricola":"","Cognome e Nome":"","Turno":"","Inizio":"","Fine":""}])
+            df_preview = pd.DataFrame(preview_rows or [{"Matricola":"","Nominativo":"","Turno fuori residenza":"","Inizio":"","Fine":""}])
             grid = st.data_editor(df_preview, num_rows="dynamic", use_container_width=True, key="file_grid")
             col_btn1, col_btn2 = st.columns([1,1])
             with col_btn1:
