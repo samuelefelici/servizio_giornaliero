@@ -326,92 +326,11 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
 # ====================== Trasferte + Preview + Export ======================
 
 if st.session_state["df_view"] is not None and st.session_state["meta"] is not None:
-    df_view = st.session_state["df_view"]
-
     c1, c2 = st.columns([1,3])
     with c1:
         if st.button("➕ Inserisci trasferte", use_container_width=True):
             st.session_state["show_transfer_ui"] = not st.session_state["show_transfer_ui"]
 
-    # --- ANTEPRIMA EDITABILE ---
-    st.markdown("### Anteprima editabile")
-    # Separiamo le trasferte manuali dalle altre righe
-    mask_manual = df_view.get("_added", False)
-    df_manual = df_view[mask_manual].copy()
-    df_original = df_view[~mask_manual].copy()
-
-    # --- Tabella principale editabile
-    # Le trasferte manuali: tutte le colonne editabili
-    # Le altre righe: solo la colonna "Indennità e note" editabile
-    columns_all = ["Matricola","Cognome e Nome","Turno","Inizio","Fine","Indennità e note","Residenza"]
-    columns_note = ["Indennità e note"]
-
-    # Righe manuali
-    edited_manual = None
-    if not df_manual.empty:
-        st.markdown("#### Trasferte aggiunte manualmente (tutte le colonne editabili)")
-        editable_manual = df_manual[columns_all].copy()
-        edited_manual = st.data_editor(
-            editable_manual,
-            num_rows="fixed",
-            use_container_width=True,
-            key="edit_manual_rows"
-        )
-
-    # Righe originali
-    edited_original = None
-    if not df_original.empty and "Indennità e note" in df_original.columns:
-        st.markdown("#### Servizio da file (solo colonna note editabile)")
-        editable_notes = df_original[columns_note].copy()
-        edited_original = st.data_editor(
-            editable_notes,
-            num_rows="fixed",
-            use_container_width=True,
-            key="edit_original_notes"
-        )
-
-    col_mod1, col_mod2 = st.columns([1,1])
-    with col_mod1:
-        if st.button("💾 Salva modifiche all'anteprima", use_container_width=True):
-            # Aggiorna le trasferte manuali
-            extra_df = pd.DataFrame()
-            if edited_manual is not None:
-                extra_df = edited_manual.copy()
-                for c in columns_all:
-                    if c not in extra_df.columns:
-                        extra_df[c] = ""
-                extra_df["Residenza"] = extra_df.apply(
-                    lambda r: r["Residenza"] or (_turno_to_residenza_name(r["Turno"]) or ""),
-                    axis=1
-                )
-                extra_df["Inizio"] = extra_df["Inizio"].map(_parse_time_like)
-                extra_df["Fine"] = extra_df["Fine"].map(_parse_time_like)
-                extra_df["_added"] = True
-                st.session_state["extra_rows"] = extra_df
-
-            # Aggiorna le note del servizio originale
-            df_original_new = df_original.copy()
-            if edited_original is not None:
-                df_original_new["Indennità e note"] = edited_original["Indennità e note"]
-
-            # Aggiorna la preview principale
-            st.session_state["df_view"] = pd.concat([df_original_new, st.session_state["extra_rows"]], ignore_index=True)
-            st.success("Modifiche salvate.")
-            _do_rerun()
-
-    with col_mod2:
-        # Cancella tutte le trasferte manuali come prima
-        if not st.session_state["extra_rows"].empty:
-            if st.button("🗑️ Svuota trasferte aggiunte", use_container_width=True):
-                st.session_state["extra_rows"] = st.session_state["extra_rows"].iloc[0:0]
-                base = st.session_state["df_view"]
-                if "_added" in base.columns:
-                    base = base[~base["_added"].fillna(False)].copy()
-                st.session_state["df_view"] = base
-                st.info("Trasferte cancellate.")
-                _do_rerun()
-
-    # --- UI per aggiunta nuove trasferte (come prima) ---
     if st.session_state["show_transfer_ui"]:
         st.markdown("### Inserisci trasferte")
         st.caption("Compila le righe (max 30). Obbligatori: Matricola, Cognome e Nome, Turno.")
@@ -454,7 +373,7 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
                     st.info("Trasferte cancellate.")
                     _do_rerun()
 
-    # ---- Anteprima (solo visualizzazione, non editabile)
+    # ---- Anteprima
     render_preview(st.session_state["df_view"], st.session_state["meta"], inner_sort_choice)
 
     # --- Export Excel ---
