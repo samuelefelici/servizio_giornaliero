@@ -17,9 +17,7 @@ REST_CODES = {"R", "RR"}   # riposo
 GLOBAL_EXC_PATTERNS = (r"^IAST$", r"^N$",)
 
 # Prefissi eccezioni ANCONA
-EXC_ANCONA_PREFIXES = (
-    "D1R1","D1R2","D1R5","D2R1","D2R2","D2R3","D2R6","NP","ASC","V5","LU","MA","ME","GI","VE","SA","DO"
-)
+EXC_ANCONA_PREFIXES = ("D1R1","D1R2","D1R5","D2R1","D2R2","D2R3","D2R6","NP","ASC","V5","LU","MA","ME","GI","VE","SA","DO")
 EXC_ANCONA_PATTERNS  = tuple(rf"^{re.escape(p)}" for p in EXC_ANCONA_PREFIXES)
 
 # --- Import moduli del progetto ---
@@ -377,26 +375,6 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
 
     # ---- Anteprima
     render_preview(st.session_state["df_view"], st.session_state["meta"], inner_sort_choice)
-
-    # ---- Modifica trasferte aggiunte manualmente ----
-    if not st.session_state["extra_rows"].empty:
-        st.markdown("### Modifica trasferte aggiunte manualmente")
-        editable_cols = ["Matricola", "Cognome e Nome", "Turno", "Inizio", "Fine", "Indennità e note", "Residenza"]
-        edited = st.data_editor(
-            st.session_state["extra_rows"][editable_cols],
-            num_rows="dynamic",
-            use_container_width=True,
-            key="edit_transfer_grid"
-        )
-        if st.button("💾 Salva modifiche trasferte"):
-            st.session_state["extra_rows"] = edited.copy()
-            # Aggiorna tabella principale
-            base = st.session_state["df_view"]
-            if "_added" in base.columns:
-                base = base[~base["_added"].fillna(False)].copy()
-            st.session_state["df_view"] = pd.concat([base, st.session_state["extra_rows"]], ignore_index=True)
-            st.success("Trasferte aggiornate!")
-            _do_rerun()
 
     # --- Export Excel ---
     xls_buf = io.BytesIO()
