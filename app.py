@@ -392,7 +392,7 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
             if file_import is not None:
                 try:
                     # Usa lo stesso parser del file principale!
-                    df_import, _ = pd.read_excel(file_import, header=None)
+                    df_import, _ = pd.read_excel(file_import, header=None, engine="xlrd")
                     # Prendi solo le colonne che servono (se esistono)
                     preview_rows = []
                     for _, row in df_import.iterrows():
