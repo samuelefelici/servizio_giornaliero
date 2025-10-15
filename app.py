@@ -373,21 +373,6 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
                     st.info("Trasferte cancellate.")
                     _do_rerun()
 
-    # ---- Anteprima
-    render_preview(st.session_state["df_view"], st.session_state["meta"], inner_sort_choice)
-
-    # --- Export Excel ---
-    xls_buf = io.BytesIO()
-    with pd.ExcelWriter(xls_buf, engine="openpyxl") as writer:
-        _reorder_for_display(st.session_state["df_view"]).to_excel(
-            writer, sheet_name="ServizioGiornaliero", index=False
-        )
-    st.download_button(
-        "⬇️ Scarica Excel",
-        data=xls_buf.getvalue(),
-        file_name="ServizioGiornaliero.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
 
     # --- Export PDF ---
     with tempfile.TemporaryDirectory() as td:
@@ -399,7 +384,7 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
             st.session_state["meta"],
             logo_path if logo_path.exists() else None,
             title=TITLE, inner_sort=inner_sort,
-            exported_at=datetime.now() + timedelta(hours=2)
+            exported_at=datetime.now()
         )
         st.download_button(
             "⬇️ Scarica PDF",
