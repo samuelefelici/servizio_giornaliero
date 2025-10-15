@@ -416,8 +416,8 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
                     rows = grid.replace({pd.NA:"", None:""}).to_dict("records")
                     rows = [r for r in rows if any(str(v).strip() for v in r.values())]
                     bad = [r for r in rows if not (str(r.get("Matricola")).strip()
-                                                   and str(r.get("Cognome e Nome")).strip()
-                                                   and str(r.get("Turno")).strip())]
+                                                   and str(r.get("Nominativo")).strip()
+                                                   and str(r.get("Turno fuori residenza")).strip())]
                     if bad:
                         st.error("Compila Matricola, Cognome e Nome e Turno per ogni riga non vuota.")
                     else:
