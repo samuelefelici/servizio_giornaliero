@@ -52,8 +52,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📋 Servizio Giornaliero")
-st.caption("Drag & drop del file Excel (.xls/.xlsx), pulizia automatica, anteprima e export PDF/Excel (raggruppato per deposito).")
+st.title("Servizio Giornaliero")
+st.caption("Carica il file Excel, visualizza l’anteprima, modifica le note e gestisci le trasferte.")
+st.divider()
 
 cfg_dir   = Path("config")
 assets_dir= Path("assest")
