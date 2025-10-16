@@ -60,6 +60,7 @@ assets_dir= Path("assest")
 logo_path = assets_dir / "logo.jpg"
 
 # ====================== Session state ======================
+# Inizializza le variabili di stato per gestire dati e opzioni dell'interfaccia utente
 st.session_state.setdefault("df_view", None)
 st.session_state.setdefault("meta", None)
 st.session_state.setdefault("last_inner_sort", "nome")
@@ -69,13 +70,16 @@ st.session_state.setdefault("extra_rows", pd.DataFrame(columns=[
 ]))
 
 # ====================== Helper ======================
+# Funzioni di supporto per manipolare dati e visualizzazioni
 
 def _reorder_for_display(df: pd.DataFrame) -> pd.DataFrame:
+    # Riordina le colonne per la visualizzazione secondo DISPLAY_ORDER
     df2  = df.drop(columns=["Residenza"], errors="ignore").copy()
     cols = [c for c in DISPLAY_ORDER if c in df2.columns]
     return df2[cols] if cols else df2
 
 def _res_to_prefix(res: str) -> str | None:
+    # Ricava il prefisso dalla stringa di residenza
     if not isinstance(res, str): return None
     r = res.upper().replace("_", " ").strip()
     if "JESI URBANO" in r or r == "JU": return "JU"
@@ -91,13 +95,16 @@ def _res_to_prefix(res: str) -> str | None:
     return None
 
 def _norm_turno(s) -> str:
+    # Normalizza la stringa del turno per confronti
     return str(s or "").upper().strip().replace(".", "").replace(" ", "")
 
 def _match_any(token: str, patterns: tuple[str, ...]) -> bool:
+    # Verifica se il token corrisponde ad almeno uno dei pattern forniti
     t = _norm_turno(token)
     return any(re.match(p, t) for p in patterns)
 
 def _turno_bucket(turno: str) -> str | None:
+    # Ricava il bucket del turno (abbreviazione)
     t = _norm_turno(turno)
     if not t or t in {"ASSENTE", *REST_CODES}: return None
     if t.startswith("JU"): return "JU"
@@ -105,10 +112,12 @@ def _turno_bucket(turno: str) -> str | None:
     return t[0]
 
 def _accepted_prefixes_for_res(prefix: str | None) -> set[str]:
+    # Restituisce i prefissi accettati per la residenza
     if prefix in {"J", "JU"}: return {"J", "JU"}
     return {prefix} if prefix else set()
 
 def _should_highlight_turno(residenza, turno) -> bool:
+    # Determina se il turno deve essere evidenziato (trasferta)
     t = _norm_turno(turno)
     if not t or t in {"ASSENTE", *REST_CODES}: return False
     if _match_any(t, GLOBAL_EXC_PATTERNS): return False
@@ -122,11 +131,13 @@ def _should_highlight_turno(residenza, turno) -> bool:
     return b not in _accepted_prefixes_for_res(rp)
 
 def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
+    # Genera una maschera booleana per evidenziare le trasferte
     if "Residenza" not in df.columns or "Turno" not in df.columns:
         return pd.Series(False, index=df.index)
     return df.apply(lambda r: _should_highlight_turno(r.get("Residenza"), r.get("Turno")), axis=1)
 
 def _is_turno_numero(turno: str) -> bool:
+    # Verifica se il turno è un numero (es. 510, 520)
     t = str(turno).strip()
     return bool(re.match(r"^\d{3}", t))  # Es: 510, 520 ecc.
 
@@ -138,6 +149,7 @@ _PREFIX_TO_RES = {
 }
 
 def _turno_to_residenza_name(turno: str) -> str | None:
+    # Ricava il nome della residenza dal turno, se possibile
     t = _norm_turno(turno)
     if not t: return None
     if t.startswith("JU"): return _PREFIX_TO_RES["JU"]
@@ -145,12 +157,14 @@ def _turno_to_residenza_name(turno: str) -> str | None:
     return _PREFIX_TO_RES.get(t[0])
 
 def _parse_time_like(s: str | None) -> str:
+    # Verifica e normalizza stringa orario (formato HH:MM)
     s = (s or "").strip()
     if not s: return ""
     m = re.match(r"^([01]?\d|2[0-3]):([0-5]\d)$", s)
     return s if m else ""
 
 def _build_extra_df(rows: list[dict]) -> pd.DataFrame:
+    # Costruisce un DataFrame dalle righe aggiuntive (trasferte manuali/file)
     if not rows: return pd.DataFrame()
     df = pd.DataFrame(rows).rename(columns={
         "Nominativo": "Cognome e Nome",
@@ -166,6 +180,7 @@ def _build_extra_df(rows: list[dict]) -> pd.DataFrame:
     return df[keep]
 
 def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series, added_mask: pd.Series | None = None) -> str:
+    # Restituisce una tabella HTML con stili specifici per visualizzazione
     df_html = g_disp.copy()
     note_col = "Indennità e note"
     if note_col in df_html.columns:
@@ -211,6 +226,7 @@ def _styled_html_table(g_disp: pd.DataFrame, trasferta_mask: pd.Series, added_ma
     return f'<div class="serv-table-wrap">{sty.to_html(escape=False)}</div>'
 
 def render_preview(df_view: pd.DataFrame, meta: dict, inner_sort_choice: str):
+    # Visualizza l'anteprima dei dati elaborati, suddivisi per deposito
     st.success(f"File elaborato. Data: {meta.get('data','?')} – {meta.get('giorno','?')} (fonte: {meta.get('origine','?')})")
     st.markdown(
         f"""
@@ -262,14 +278,17 @@ def render_preview(df_view: pd.DataFrame, meta: dict, inner_sort_choice: str):
         st.markdown(html, unsafe_allow_html=True)
 
 def _do_rerun():
+    # Forza il riavvio della UI Streamlit
     fn = getattr(st, "rerun", None)
     if callable(fn): fn()
     else: st.experimental_rerun()
 
 # ====================== UI ======================
 
+# Caricamento file Excel
 uploaded = st.file_uploader("Trascina qui il file oppure selezionalo", type=["xls","xlsx"])
 
+# Opzioni di ordinamento e visualizzazione
 col1, col2 = st.columns([1,1], vertical_alignment="center")
 with col1:
     inner_sort_choice = st.radio(
@@ -289,6 +308,7 @@ debug_mode = st.checkbox("🧪 Modalità debug", value=False,
 # ====================== Azione: ELABORA ======================
 
 if st.button("▶️ Elabora", type="primary", use_container_width=True):
+    # Avvia elaborazione file selezionato
     if not uploaded:
         st.warning("Carica prima un file.")
         st.stop()
@@ -330,6 +350,7 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
     c1, c2 = st.columns([1,3])
     with c1:
         if st.button("➕ Inserisci trasferte", use_container_width=True):
+            # Mostra UI per inserimento trasferte
             st.session_state["show_transfer_ui"] = True
             st.session_state["transfer_mode"] = None
             _do_rerun()
