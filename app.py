@@ -295,7 +295,7 @@ if uploaded:
 st.divider()
 
 # Opzioni di ordinamento e visualizzazione
-with st.expander("Opzioni di visualizzazione", expanded=True)
+with st.expander("Opzioni di visualizzazione", expanded=True):
     col1, col2 = st.columns([1,1])
     with col1:
         inner_sort_choice = st.radio(
