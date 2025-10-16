@@ -349,11 +349,19 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
 if st.session_state["df_view"] is not None and st.session_state["meta"] is not None:
     c1, c2 = st.columns([1,3])
     with c1:
-        if st.button("➕ Inserisci trasferte", use_container_width=True):
-            # Mostra UI per inserimento trasferte
-            st.session_state["show_transfer_ui"] = True
-            st.session_state["transfer_mode"] = None
-            _do_rerun()
+        with st.popover("➕ Inserisci trasferte", use_container_width=True):
+            st.markdown("**Seleziona modalità inserimento trasferte:**")
+            colm, colf = st.columns(2)
+            with colm:
+                if st.button("Manuale"):
+                    st.session_state["show_transfer_ui"] = True
+                    st.session_state["transfer_mode"] = "manuale"
+                    _do_rerun()
+            with colf:
+                if st.button("Da File"):
+                    st.session_state["show_transfer_ui"] = True
+                    st.session_state["transfer_mode"] = "file"
+                    _do_rerun()
 
     if st.session_state.get("show_transfer_ui", False):
         st.markdown("### Inserisci trasferte")
