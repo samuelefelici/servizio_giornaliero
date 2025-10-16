@@ -360,33 +360,87 @@ if st.button("▶️ Elabora", type="primary", use_container_width=True):
 # ====================== Trasferte + Preview + Export ======================
 
 if st.session_state["df_view"] is not None and st.session_state["meta"] is not None:
-    c1, c2 = st.columns([1,3])
-    with c1:
-        with st.popover("➕ Inserisci trasferte", use_container_width=True):
-    # Bottoni più piccoli, affiancati
+    st.header("Azioni rapide")
+    st.divider()
+
+    # --- Barra azioni principali ---
+    colA, colB, colC = st.columns([2,2,1])
+    with colA:
+        # Popover compatto per inserimento trasferte
+        with st.popover("➕ Trasferte", use_container_width=True):
+            st.caption("Aggiungi nuove trasferte manualmente o da file.")
+            btn_style = dict(use_container_width=True)
             col1, col2 = st.columns(2)
             with col1:
-                if st.button("📝 Manuale"):
+                if st.button("📝 Manuale", **btn_style):
                     st.session_state["show_transfer_ui"] = True
                     st.session_state["transfer_mode"] = "manuale"
                     _do_rerun()
             with col2:
-                if st.button("📄 Da File"):
+                if st.button("📄 Da File", **btn_style):
                     st.session_state["show_transfer_ui"] = True
                     st.session_state["transfer_mode"] = "file"
                     _do_rerun()
+    with colB:
+        # Popover per modifica note
+        if "Indennità e note" in st.session_state["df_view"].columns:
+            with st.popover("✏️ Modifica Note", use_container_width=True):
+                df_notes = st.session_state["df_view"].copy()
+                search_value = st.text_input("🔎 Cerca Cognome e Nome", placeholder="Digita il cognome...", key="search_notes")
+                # Filtra per ricerca
+                if search_value:
+                    mask = df_notes["Cognome e Nome"].str.contains(search_value, case=False, na=False)
+                    df_notes = df_notes[mask].copy()
+                cols_for_edit = [c for c in ["Matricola", "Cognome e Nome", "Indennità e note"] if c in df_notes.columns]
+                editable = df_notes[cols_for_edit].copy()
+                edited = st.data_editor(
+                    editable,
+                    use_container_width=True,
+                    num_rows="fixed",
+                    column_config={
+                        "Indennità e note": st.column_config.TextColumn("Note", required=False)
+                    }
+                )
+                if st.button("💾 Salva Note", **btn_style):
+                    mask_cols = ["Matricola", "Cognome e Nome"]
+                    for idx, row in edited.iterrows():
+                        # Trova la riga corrispondente nella session_state["df_view"]
+                        base_mask = True
+                        for col in mask_cols:
+                            if col in st.session_state["df_view"].columns:
+                                base_mask = base_mask & (st.session_state["df_view"][col] == row[col])
+                        note_value = row["Indennità e note"]
+                        # Gestione note vuote: nessun None
+                        if note_value is None or (isinstance(note_value, float) and pd.isna(note_value)):
+                            note_value = ""
+                        st.session_state["df_view"].loc[base_mask, "Indennità e note"] = note_value
+                    st.success("Note aggiornate!")
+                    _do_rerun()
+    with colC:
+        # Svuota trasferte
+        if not st.session_state["extra_rows"].empty:
+            if st.button("🗑️ Svuota trasferte", use_container_width=True):
+                st.session_state["extra_rows"] = st.session_state["extra_rows"].iloc[0:0]
+                base = st.session_state["df_view"]
+                if "_added" in base.columns:
+                    base = base[~base["_added"].fillna(False)].copy()
+                st.session_state["df_view"] = base
+                st.info("Trasferte cancellate.")
+                _do_rerun()
 
+    # --- UI inserimento trasferte ---
     if st.session_state.get("show_transfer_ui", False):
-        st.markdown("### Inserisci trasferte")
+        st.divider()
+        st.subheader("Inserisci trasferte")
         # Scegli il metodo solo se non è già selezionato
         if st.session_state.get("transfer_mode") is None:
             colm, colf = st.columns(2)
             with colm:
-                if st.button("Manuale"):
+                if st.button("Manuale", use_container_width=True):
                     st.session_state["transfer_mode"] = "manuale"
                     _do_rerun()
             with colf:
-                if st.button("Da File"):
+                if st.button("Da File", use_container_width=True):
                     st.session_state["transfer_mode"] = "file"
                     _do_rerun()
 
@@ -398,7 +452,7 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
                 [{"Matricola":"","Cognome e Nome":"","Turno":"","Inizio":"","Fine":""} for _ in range(start_rows)]
             )
             grid = st.data_editor(default_rows, num_rows="dynamic", use_container_width=True, key="manual_grid")
-            col_btn1, col_btn2 = st.columns([1,1])
+            col_btn1, col_btn2 = st.columns([2,1])
             with col_btn1:
                 if st.button("✅ Conferma trasferte", use_container_width=True):
                     rows = grid.replace({pd.NA:"", None:""}).to_dict("records")
@@ -430,7 +484,6 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
             st.caption("Importa trasferte da file XLS/XLSX. Prende solo Matricola (col.2), Nome (col.3), Turno (col.5)")
             file_import = st.file_uploader("Scegli file trasferte", type=["xls","xlsx"], key="upl_transfer_xls")
             preview_rows = []
-            # Sostituisci la parte di import da file trasferte con questa:
             if file_import is not None:
                 try:
                     df_import = pd.read_csv(file_import, sep='\t', header=0, encoding='cp1252')
@@ -448,10 +501,9 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
                     st.success(f"Trasferte importate dal file: {len(preview_rows)}")
                 except Exception as e:
                     st.error(f"Errore import: {e}")
-            # Tabella editabile delle trasferte importate
             df_preview = pd.DataFrame(preview_rows or [{"Matricola":"","Nominativo":"","Turno fuori residenza":"","Inizio":"","Fine":""}])
             grid = st.data_editor(df_preview, num_rows="dynamic", use_container_width=True, key="file_grid")
-            col_btn1, col_btn2 = st.columns([1,1])
+            col_btn1, col_btn2 = st.columns([2,1])
             with col_btn1:
                 if st.button("✅ Conferma trasferte importate", use_container_width=True):
                     rows = grid.replace({pd.NA:"", None:""}).to_dict("records")
@@ -475,55 +527,15 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
                     st.session_state["transfer_mode"] = None
                     _do_rerun()
 
-    # Svuota trasferte
-    if not st.session_state["extra_rows"].empty:
-        if st.button("🗑️ Svuota trasferte aggiunte", use_container_width=True):
-            st.session_state["extra_rows"] = st.session_state["extra_rows"].iloc[0:0]
-            base = st.session_state["df_view"]
-            if "_added" in base.columns:
-                base = base[~base["_added"].fillna(False)].copy()
-            st.session_state["df_view"] = base
-            st.info("Trasferte cancellate.")
-            _do_rerun()
-
-    # Mostra bottone per modifica note se è presente la colonna
-if st.session_state["df_view"] is not None and "Indennità e note" in st.session_state["df_view"].columns:
-    with st.popover("✏️ Modifica Note", use_container_width=True):
-        df_notes = st.session_state["df_view"].copy()
-        search_value = st.text_input("🔎 Cerca Cognome e Nome", "")
-
-        if search_value:
-            mask = df_notes["Cognome e Nome"].str.contains(search_value, case=False, na=False)
-            df_notes = df_notes[mask].copy()
-        cols_for_edit = [c for c in ["Matricola", "Cognome e Nome", "Indennità e note"] if c in df_notes.columns]
-        editable = df_notes[cols_for_edit].copy()
-        # Editor tabellare solo per le note
-        edited = st.data_editor(
-            editable,
-            use_container_width=True,
-            num_rows="fixed",
-            column_config={
-                "Indennità e note": st.column_config.TextColumn("Note", required=False)
-            }
-        )
-        if st.button("💾 Salva Note"):
-            # Aggiorna la colonna note nella sessione
-            mask_cols = ["Matricola", "Cognome e Nome"]
-            for idx, row in edited.iterrows():
-                # Trova la riga corrispondente nella session_state["df_view"] (usando Matricola+Nome)
-                mask = True
-                for col in mask_cols:
-                    if col in df_notes.columns:
-                        mask = mask & (st.session_state["df_view"][col] == row[col])
-                # Aggiorna la nota
-                st.session_state["df_view"].loc[mask, "Indennità e note"] = row["Indennità e note"]
-            st.success("Note aggiornate!")
-            _do_rerun()
+    st.divider()
 
     # ---- Anteprima
     render_preview(st.session_state["df_view"], st.session_state["meta"], inner_sort_choice)
 
+    st.divider()
+
     # --- Export PDF ---
+    st.subheader("Esporta in PDF")
     with tempfile.TemporaryDirectory() as td:
         temp_dir = Path(td)
         inner_sort = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
@@ -539,5 +551,6 @@ if st.session_state["df_view"] is not None and "Indennità e note" in st.session
             "⬇️ Scarica PDF",
             data=pdf_path.read_bytes(),
             file_name=pdf_path.name,
-            mime="application/pdf"
+            mime="application/pdf",
+            use_container_width=True
         )
