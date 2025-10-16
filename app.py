@@ -287,7 +287,12 @@ def _do_rerun():
 # ====================== UI ======================
 
 # Caricamento file Excel
+st.header("Carica il file")
 uploaded = st.file_uploader("Trascina qui il file oppure selezionalo", type=["xls","xlsx"])
+if uploaded:
+    st.success("File caricato correttamente.")
+
+st.divider()
 
 # Opzioni di ordinamento e visualizzazione
 col1, col2 = st.columns([1,1], vertical_alignment="center")
