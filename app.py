@@ -296,18 +296,18 @@ st.divider()
 
 # Opzioni di ordinamento e visualizzazione
 with st.expander("Opzioni di visualizzazione", expanded=True)
-col1, col2 = st.columns([1,1])
-with col1:
-    inner_sort_choice = st.radio(
-        "Ordina ciascun deposito per:",
-        ["Cognome e Nome (A→Z)", "Inizio (orario)"],
-        horizontal=True, index=0
+    col1, col2 = st.columns([1,1])
+    with col1:
+        inner_sort_choice = st.radio(
+            "Ordina ciascun deposito per:",
+            ["Cognome e Nome (A→Z)", "Inizio (orario)"],
+            horizontal=True, index=0
     )
-with col2:
-    show_absent = st.checkbox(
-        "Mostra anche gli 'Assente'", value=True,
-        help="Se deselezionato nasconde le righe con Turno = Assente (vale per anteprima ed export)."
-    )
+    with col2:
+        show_absent = st.checkbox(
+            "Mostra anche gli 'Assente'", value=True,
+            help="Se deselezionato nasconde le righe con Turno = Assente (vale per anteprima ed export)."
+        )
 
 debug_mode = st.checkbox("🧪 Modalità debug", value=False,
                          help="Mostra info sniffer/header del file caricato.")
