@@ -313,7 +313,8 @@ with st.expander("Opzioni di visualizzazione", expanded=True):
 with st.expander("🧪 Debug"):
     debug_mode = st.checkbox("Attiva modalità debug")
     if debug_mode:
-        # mostra info debug...
+        debug_mode = st.checkbox("🧪 Modalità debug", value=False,
+                         help="Mostra info sniffer/header del file caricato.")
 
 st.divider()
 
