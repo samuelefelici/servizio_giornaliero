@@ -473,6 +473,36 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
             st.info("Trasferte cancellate.")
             _do_rerun()
 
+    # Mostra bottone per modifica note se è presente la colonna
+if st.session_state["df_view"] is not None and "Indennità e note" in st.session_state["df_view"].columns:
+    with st.popover("✏️ Modifica Note", use_container_width=True):
+        df_notes = st.session_state["df_view"].copy()
+        # Mostra solo le colonne di riferimento e note
+        cols_for_edit = [c for c in ["Matricola", "Cognome e Nome", "Indennità e note"] if c in df_notes.columns]
+        editable = df_notes[cols_for_edit].copy()
+        # Editor tabellare solo per le note
+        edited = st.data_editor(
+            editable,
+            use_container_width=True,
+            num_rows="fixed",
+            column_config={
+                "Indennità e note": st.column_config.TextColumn("Note", required=False)
+            }
+        )
+        if st.button("💾 Salva Note"):
+            # Aggiorna la colonna note nella sessione
+            mask_cols = ["Matricola", "Cognome e Nome"]
+            for idx, row in edited.iterrows():
+                # Trova la riga corrispondente nella session_state["df_view"] (usando Matricola+Nome)
+                mask = True
+                for col in mask_cols:
+                    if col in df_notes.columns:
+                        mask = mask & (st.session_state["df_view"][col] == row[col])
+                # Aggiorna la nota
+                st.session_state["df_view"].loc[mask, "Indennità e note"] = row["Indennità e note"]
+            st.success("Note aggiornate!")
+            _do_rerun()
+
     # ---- Anteprima
     render_preview(st.session_state["df_view"], st.session_state["meta"], inner_sort_choice)
 
