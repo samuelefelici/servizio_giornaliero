@@ -477,7 +477,11 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
 if st.session_state["df_view"] is not None and "Indennità e note" in st.session_state["df_view"].columns:
     with st.popover("✏️ Modifica Note", use_container_width=True):
         df_notes = st.session_state["df_view"].copy()
-        # Mostra solo le colonne di riferimento e note
+        search_value = st.text_input("🔎 Cerca Cognome e Nome", "")
+
+        if search_value:
+            mask = df_notes["Cognome e Nome"].str.contains(search_value, case=False, na=False)
+            df_notes = df_notes[mask].copy()
         cols_for_edit = [c for c in ["Matricola", "Cognome e Nome", "Indennità e note"] if c in df_notes.columns]
         editable = df_notes[cols_for_edit].copy()
         # Editor tabellare solo per le note
