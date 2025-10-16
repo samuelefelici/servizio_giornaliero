@@ -295,10 +295,11 @@ if uploaded:
 st.divider()
 
 # Opzioni di ordinamento e visualizzazione
-col1, col2 = st.columns([1,1], vertical_alignment="center")
+with st.expander("Opzioni di visualizzazione", expanded=True)
+col1, col2 = st.columns([1,1])
 with col1:
     inner_sort_choice = st.radio(
-        "Ordina dentro ciascun deposito per:",
+        "Ordina ciascun deposito per:",
         ["Cognome e Nome (A→Z)", "Inizio (orario)"],
         horizontal=True, index=0
     )
