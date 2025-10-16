@@ -444,6 +444,12 @@ def build_pdf(
         if idx_fine is not None:
             base_style.append(("ALIGN", (idx_fine, 1), (idx_fine, -1), "CENTER"))
 
+         # --- Tutte le celle della colonna Turno in grassetto ---
+        idx_turno = col_idx.get("Turno")
+        if idx_turno is not None:
+            base_style.append(("FONTNAME", (idx_turno, 1), (idx_turno, -1), "Helvetica-Bold"))
+
+
         # --- LOGICA STILE ---
         for i, row in enumerate(data[1:], start=1):
             turno_val = row[header.index("Turno")] if "Turno" in header else ""
