@@ -309,8 +309,13 @@ with st.expander("Opzioni di visualizzazione", expanded=True):
             help="Se deselezionato nasconde le righe con Turno = Assente (vale per anteprima ed export)."
         )
 
-debug_mode = st.checkbox("🧪 Modalità debug", value=False,
-                         help="Mostra info sniffer/header del file caricato.")
+# --- Debug (in expander) ---
+with st.expander("🧪 Debug"):
+    debug_mode = st.checkbox("Attiva modalità debug")
+    if debug_mode:
+        # mostra info debug...
+
+st.divider()
 
 # ====================== Azione: ELABORA ======================
 
