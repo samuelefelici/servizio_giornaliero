@@ -1,6 +1,6 @@
 ABSENCE_CODES = {
     "PC","AA","AF","AO","AP","AS","AM","PADm","PAD","PA",
-    "CM8","CM","PD","FP","FU","F1/2","F","AGP","I4","I91","I",
+    "CM8","CM","PD","FP","FU","F1/2","F", "FB","AGP","I4","I91","I",
     "MA3","MA20","MA","ES","FI","S","PSn","PSm3","PSm2","PAL",
     "P626","PS30","PS","PZ","PE","PPR","PP","PVM","SG","NF"
 }
