@@ -3,6 +3,8 @@ from pathlib import Path
 from html import escape as html_escape
 from datetime import datetime, timedelta
 import pandas as pd
+import streamlit.components.v1 as components
+import base64
 
 # --- Path per import locali ---
 ROOT = Path(__file__).resolve().parent
@@ -541,7 +543,7 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
         temp_dir = Path(td)
         inner_sort = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
 
-    # 1) Costruisci il PDF ESATTAMENTE come prima
+    # 1) Costruisci il PDF
         pdf_path = build_pdf(
             temp_dir,
             st.session_state["df_view"],
@@ -549,58 +551,59 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
             logo_path if logo_path.exists() else None,
             title=TITLE,
             inner_sort=inner_sort,
-            exported_at=datetime.now()
+            exported_at=datetime.now(),
         )
 
         pdf_bytes = pdf_path.read_bytes()
         pdf_filename = pdf_path.name
 
-    # 2) UI: due pulsanti affiancati
-        col_dl, col_print = st.columns([1, 1])
+    # 2) Download (come prima)
+        st.download_button(
+            "⬇️ Scarica PDF",
+            data=pdf_bytes,
+            file_name=pdf_filename,
+            mime="application/pdf",
+            use_container_width=True,
+        )
 
-        with col_dl:
-            st.download_button(
-                "⬇️ Scarica PDF",
-                data=pdf_bytes,
-                file_name=pdf_filename,
-                mime="application/pdf",
-                use_container_width=True
-            )
+    # 3) Anteprima + Stampa (dialog stampa del browser)
+        import base64
+        b64 = base64.b64encode(pdf_bytes).decode("utf-8")
 
-        with col_print:
-        # Crea un bottone che, quando cliccato, apre una nuova scheda con il PDF
-        # e lancia la stampa del browser su quel PDF.
-            import base64
+        html_preview_and_print = f"""
+        <div style="display:flex; gap:12px; align-items:center; margin: 10px 0;">
+          <button
+            type="button"
+            onclick="
+              const frame = document.getElementById('sg_pdf_frame');
+              if (frame && frame.contentWindow) {{
+                frame.contentWindow.focus();
+                frame.contentWindow.print();
+              }} else {{
+                alert('Anteprima non pronta. Riprova tra un secondo.');
+              }}
+            "
+            style="
+              padding:0.6rem 1rem;
+              border-radius:0.5rem;
+              border:1px solid rgba(49, 51, 63, 0.2);
+              background-color:white;
+              cursor:pointer;
+            "
+          >
+            🖨️ Stampa
+          </button>
 
-            b64 = base64.b64encode(pdf_bytes).decode("utf-8")
-            pdf_data_url = f"data:application/pdf;base64,{b64}"
+          <span style="color:#666; font-size: 0.9rem;">
+            (la stampa usa l’anteprima PDF qui sotto)
+          </span>
+        </div>
 
-        # Nota: Streamlit non ha un "print_button" nativo.
-        # Usiamo un link HTML che apre una nuova finestra e chiama window.print().
-            html_print = f"""
-            <a style="text-decoration:none;" href="{pdf_data_url}" target="_blank"
-               onclick="
-                 const w = window.open('{pdf_data_url}', '_blank');
-                 // Attendi che la nuova finestra carichi il PDF, poi stampa.
-                 const timer = setInterval(() => {{
-                   if (w && w.document && w.document.readyState === 'complete') {{
-                     clearInterval(timer);
-                     w.focus();
-                     w.print();
-                   }}
-                 }}, 400);
-                 return false;
-               ">
-              <button style="
-                  width:100%;
-                  padding:0.6rem 1rem;
-                  border-radius:0.5rem;
-                  border:1px solid rgba(49, 51, 63, 0.2);
-                  background-color:white;
-                  cursor:pointer;
-                ">
-                🖨️ Stampa
-              </button>
-            </a>
-            """
-            st.markdown(html_print, unsafe_allow_html=True)
+        <iframe
+          id="sg_pdf_frame"
+          src="data:application/pdf;base64,{b64}"
+          style="width: 100%; height: 720px; border: 1px solid rgba(49, 51, 63, 0.2); border-radius: 8px;"
+        ></iframe>
+        """
+
+        components.html(html_preview_and_print, height=820, scrolling=True)
