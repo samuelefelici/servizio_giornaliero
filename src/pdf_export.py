@@ -70,16 +70,16 @@ BLUE = colors.HexColor("#0b5ed7")  # colore testo per righe aggiunte (come antep
 # Parametri di compattazione (tuning per stare in 5 pagine)
 # ============================================================
 
-TABLE_FONT_SIZE = 7
-TABLE_LEADING = 8
+TABLE_FONT_SIZE = 10
+TABLE_LEADING = 12
 
-NOTE_FONT_SIZE = 7
-NOTE_LEADING = 8
+NOTE_FONT_SIZE = 10
+NOTE_LEADING = 12
 
-CELL_PAD_TOP = 1
-CELL_PAD_BOTTOM = 1
-CELL_PAD_LEFT = 2
-CELL_PAD_RIGHT = 2
+CELL_PAD_TOP = 2
+CELL_PAD_BOTTOM = 2
+CELL_PAD_LEFT = 3
+CELL_PAD_RIGHT = 3
 
 MARGIN_LEFT = 9 * mm
 MARGIN_RIGHT = 9 * mm
