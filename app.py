@@ -535,72 +535,72 @@ if st.session_state["df_view"] is not None and st.session_state["meta"] is not N
     st.divider()
 
 # --- Export PDF ---
-st.subheader("Esporta in PDF")
+    st.subheader("Esporta in PDF")
 
-with tempfile.TemporaryDirectory() as td:
-    temp_dir = Path(td)
-    inner_sort = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
+    with tempfile.TemporaryDirectory() as td:
+        temp_dir = Path(td)
+        inner_sort = "inizio" if inner_sort_choice.startswith("Inizio") else "nome"
 
     # 1) Costruisci il PDF ESATTAMENTE come prima
-    pdf_path = build_pdf(
-        temp_dir,
-        st.session_state["df_view"],
-        st.session_state["meta"],
-        logo_path if logo_path.exists() else None,
-        title=TITLE,
-        inner_sort=inner_sort,
-        exported_at=datetime.now()
-    )
-
-    pdf_bytes = pdf_path.read_bytes()
-    pdf_filename = pdf_path.name
-
-    # 2) UI: due pulsanti affiancati
-    col_dl, col_print = st.columns([1, 1])
-
-    with col_dl:
-        st.download_button(
-            "⬇️ Scarica PDF",
-            data=pdf_bytes,
-            file_name=pdf_filename,
-            mime="application/pdf",
-            use_container_width=True
+        pdf_path = build_pdf(
+            temp_dir,
+            st.session_state["df_view"],
+            st.session_state["meta"],
+            logo_path if logo_path.exists() else None,
+            title=TITLE,
+            inner_sort=inner_sort,
+            exported_at=datetime.now()
         )
 
-    with col_print:
+        pdf_bytes = pdf_path.read_bytes()
+        pdf_filename = pdf_path.name
+
+    # 2) UI: due pulsanti affiancati
+        col_dl, col_print = st.columns([1, 1])
+
+        with col_dl:
+            st.download_button(
+                "⬇️ Scarica PDF",
+                data=pdf_bytes,
+                file_name=pdf_filename,
+                mime="application/pdf",
+                use_container_width=True
+            )
+
+        with col_print:
         # Crea un bottone che, quando cliccato, apre una nuova scheda con il PDF
         # e lancia la stampa del browser su quel PDF.
-        import base64
+            import base64
 
-        b64 = base64.b64encode(pdf_bytes).decode("utf-8")
-        pdf_data_url = f"data:application/pdf;base64,{b64}"
+            b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+            pdf_data_url = f"data:application/pdf;base64,{b64}"
 
         # Nota: Streamlit non ha un "print_button" nativo.
         # Usiamo un link HTML che apre una nuova finestra e chiama window.print().
-        html_print = f"""
-        <a style="text-decoration:none;" href="{pdf_data_url}" target="_blank"
-           onclick="
-             const w = window.open('{pdf_data_url}', '_blank');
-             // Attendi che la nuova finestra carichi il PDF, poi stampa.
-             const timer = setInterval(() => {{
-               if (w && w.document && w.document.readyState === 'complete') {{
-                 clearInterval(timer);
-                 w.focus();
-                 w.print();
-               }}
-             }}, 400);
-             return false;
-           ">
-          <button style="
-              width:100%;
-              padding:0.6rem 1rem;
-              border-radius:0.5rem;
-              border:1px solid rgba(49, 51, 63, 0.2);
-              background-color:white;
-              cursor:pointer;
-            ">
-            🖨️ Stampa
-          </button>
-        </a>
-        """
-        st.markdown(html_print, unsafe_allow_html=True)
+            html_print = f"""
+            <a style="text-decoration:none;" href="{pdf_data_url}" target="_blank"
+               onclick="
+                 const w = window.open('{pdf_data_url}', '_blank');
+                 // Attendi che la nuova finestra carichi il PDF, poi stampa.
+                 const timer = setInterval(() => {{
+                   if (w && w.document && w.document.readyState === 'complete') {{
+                     clearInterval(timer);
+                     w.focus();
+                     w.print();
+                   }}
+                 }}, 400);
+                 return false;
+               ">
+              <button style="
+                  width:100%;
+                  padding:0.6rem 1rem;
+                  border-radius:0.5rem;
+                  border:1px solid rgba(49, 51, 63, 0.2);
+                  background-color:white;
+                  cursor:pointer;
+                ">
+                🖨️ Stampa
+              </button>
+            </a>
+            """
+            st.markdown(html_print, unsafe_allow_html=True)
