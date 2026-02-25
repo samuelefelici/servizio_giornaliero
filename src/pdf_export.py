@@ -320,7 +320,7 @@ def build_pdf(
         "TitleTight",
         parent=styles["Title"],
         fontName="Helvetica-Bold",
-        fontSize=18,
+        fontSize=15,
         leading=20,
         textColor=colors.red,
         spaceAfter=6,
@@ -329,7 +329,7 @@ def build_pdf(
     group_style = ParagraphStyle(
         "GroupTitle",
         parent=styles["Heading2"],
-        fontSize=14,
+        fontSize=11,
         leading=16,
         spaceBefore=6,
         spaceAfter=2,
@@ -338,7 +338,7 @@ def build_pdf(
     note_style = ParagraphStyle(
         "NoteBody",
         parent=styles["BodyText"],
-        leading=12,
+        leading=8,
         wordWrap="CJK",
     )
     note_style_blue = ParagraphStyle(
@@ -349,7 +349,7 @@ def build_pdf(
     small_note_style = ParagraphStyle(
         "SmallExportNote",
         parent=styles["Normal"],
-        fontSize=8,
+        fontSize=7,
         textColor=colors.grey,
         spaceBefore=1,
         spaceAfter=0,
