@@ -1,6 +1,12 @@
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import (
-    SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, Flowable
+    SimpleDocTemplate,
+    Table,
+    TableStyle,
+    Paragraph,
+    Spacer,
+    Image,
+    Flowable,
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
@@ -19,18 +25,38 @@ try:
     _TZ_ROMA = ZoneInfo("Europe/Rome")
 except Exception:  # pragma: no cover
     import pytz
+
     _TZ_ROMA = pytz.timezone("Europe/Rome")
 
 from .constants import DISPLAY_ORDER
 
-# ======================= Costanti & regole =======================
+# ============================================================
+# Costanti & regole
+# ============================================================
+
 REST_CODES = {"R", "RR"}  # riposo
 
 GLOBAL_EXC_PATTERNS = (r"^IAST$", r"^N$",)
 
 EXC_ANCONA_PREFIXES = (
-    "D1R1", "D1R2", "STRA", "D1R5", "D2R1", "D2R2", "D2R3", "D2R6",
-    "NP", "ASC", "V5", "LU", "MA", "ME", "GI", "VE", "SA", "DO",
+    "D1R1",
+    "D1R2",
+    "STRA",
+    "D1R5",
+    "D2R1",
+    "D2R2",
+    "D2R3",
+    "D2R6",
+    "NP",
+    "ASC",
+    "V5",
+    "LU",
+    "MA",
+    "ME",
+    "GI",
+    "VE",
+    "SA",
+    "DO",
 )
 EXC_OTHER_PREFIXES = ("IAST", "N")
 
@@ -40,11 +66,38 @@ MAX_LOGO_H = 22.5 * mm
 ARROW_MARK = "↳"  # segnale usato nella colonna nome per “secondo turno”
 BLUE = colors.HexColor("#0b5ed7")  # colore testo per righe aggiunte (come anteprima)
 
+# ============================================================
+# Parametri di compattazione (tuning per stare in 5 pagine)
+# ============================================================
+
+TABLE_FONT_SIZE = 7
+TABLE_LEADING = 8
+
+NOTE_FONT_SIZE = 7
+NOTE_LEADING = 8
+
+CELL_PAD_TOP = 1
+CELL_PAD_BOTTOM = 1
+CELL_PAD_LEFT = 2
+CELL_PAD_RIGHT = 2
+
+MARGIN_LEFT = 9 * mm
+MARGIN_RIGHT = 9 * mm
+MARGIN_TOP = 8 * mm
+MARGIN_BOTTOM = 8 * mm
+
+BLOCK_SPACER_MM = 1 * mm
+
+
 def _is_turno_numero(turno: str) -> bool:
     t = str(turno).strip()
-    return bool(re.match(r"^\d{3}", t)) # Es: 510, 520 ecc.
+    return bool(re.match(r"^\d{3}", t))  # Es: 510, 520 ecc.
 
-# ---------- Freccia vettoriale (no font) ----------
+
+# ============================================================
+# Freccia vettoriale (no font)
+# ============================================================
+
 class CornerArrow(Flowable):
     """
     Disegna un’icona “angolo + freccia verso destra” (tipo └→),
@@ -60,17 +113,16 @@ class CornerArrow(Flowable):
         stroke_color=colors.black,
     ):
         super().__init__()
-        self.width = float(cell_width)          # la Table userà questa width
-        self.height = float(size * 1.6)         # altezza sufficiente per la punta
+        self.width = float(cell_width)
+        self.height = float(size * 1.6)
         self._s = float(size)
         self._stroke = float(stroke)
-        self._shift = float(shift_left_mm)      # offset verso sinistra
+        self._shift = float(shift_left_mm)
         self._color = stroke_color
 
     def draw(self):
         c = self.canv
         s = self._s
-        # ancoraggio vicino al bordo destro della cella
         x0 = self.width - (s * 4.2 + self._shift)
         y0 = self.height * 0.55
 
@@ -90,7 +142,10 @@ class CornerArrow(Flowable):
         c.restoreState()
 
 
-# ======================= Utility orario =======================
+# ============================================================
+# Utility orario
+# ============================================================
+
 def _as_rome(dt: datetime | None) -> datetime:
     """Rende dt in Europe/Rome. Se dt è naive, lo assume UTC."""
     if dt is None:
@@ -100,7 +155,10 @@ def _as_rome(dt: datetime | None) -> datetime:
     return dt.astimezone(_TZ_ROMA)
 
 
-# ======================= Utility evidenziazione =======================
+# ============================================================
+# Utility evidenziazione
+# ============================================================
+
 def _res_to_prefix(res: str) -> str | None:
     if not isinstance(res, str):
         return None
@@ -182,7 +240,11 @@ def _trasferta_mask(df: pd.DataFrame) -> pd.Series:
         axis=1,
     )
 
-# ======================= Header helper =======================
+
+# ============================================================
+# Header helper
+# ============================================================
+
 def _header_table(
     title_para: Paragraph,
     logo_path: Path | None,
@@ -206,44 +268,55 @@ def _header_table(
 
     right_col = Table([[img], [small_para]], colWidths=[right_w])
     right_col.setStyle(
-        TableStyle([
-            ("ALIGN", (0, 0), (0, 0), "CENTER"),
-            ("ALIGN", (0, 1), (0, 1), "RIGHT"),
-            ("TOPPADDING", (0, 1), (0, 1), 6),
-            ("LEFTPADDING", (0, 0), (-1, -1), 0),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-        ])
+        TableStyle(
+            [
+                ("ALIGN", (0, 0), (0, 0), "CENTER"),
+                ("ALIGN", (0, 1), (0, 1), "RIGHT"),
+                ("TOPPADDING", (0, 1), (0, 1), 4),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+            ]
+        )
     )
 
     tbl = Table([[title_para, right_col]], colWidths=[page_w - right_w, right_w])
     tbl.setStyle(
-        TableStyle([
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 0),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-            ("TOPPADDING", (0, 0), (-1, -1), 0),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ])
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]
+        )
     )
     return tbl
 
-# ======================= Shaping tabella =======================
+
+# ============================================================
+# Shaping tabella
+# ============================================================
+
 def _collapse_repeats(
     gdf: pd.DataFrame,
     key_cols=("Cognome e Nome", "Matricola"),
-    collapse_cols=("Cognome e Nome", "Matricola"),
 ) -> pd.DataFrame:
     missing = [c for c in key_cols if c not in gdf.columns]
     if missing:
         return gdf
+
     g = gdf.copy()
     dup_mask = (g[list(key_cols)] == g[list(key_cols)].shift(1)).all(axis=1)
+
     if "Matricola" in g.columns:
         g.loc[dup_mask, "Matricola"] = ""
     if "Cognome e Nome" in g.columns:
         g.loc[dup_mask, "Cognome e Nome"] = ARROW_MARK
+
     return g
+
 
 def _table_data_for(
     df: pd.DataFrame,
@@ -252,6 +325,7 @@ def _table_data_for(
     rows_blue: set[int] | None = None,
 ):
     rows_blue = rows_blue or set()
+
     cols = [c for c in DISPLAY_ORDER if c in df.columns]
     dfp = df.copy()
     if cols:
@@ -262,16 +336,20 @@ def _table_data_for(
     rows = dfp.fillna("").values.tolist()
 
     idx_note = header.index("Indennità e note") if "Indennità e note" in header else None
+
     table_rows = [header]
-    for ridx, r in enumerate(rows, start=1):  # 1-based
+    for ridx, r in enumerate(rows, start=1):  # 1-based (riga 0 è header)
         if idx_note is not None:
             txt = str(r[idx_note])
             txt = escape(txt).replace("*", "<br/>")
+
             style_to_use = para_style_blue if (para_style_blue and ridx in rows_blue) else para_style
             r[idx_note] = Paragraph(txt, style_to_use)
+
         table_rows.append(r)
 
     return table_rows
+
 
 def _calc_col_widths(page_width: float) -> list[float]:
     w_matricola = 24 * mm
@@ -279,11 +357,17 @@ def _calc_col_widths(page_width: float) -> list[float]:
     w_turno = 22 * mm
     w_inizio = 18 * mm
     w_fine = 18 * mm
+
     used = w_matricola + w_nome + w_turno + w_inizio + w_fine
     w_note = max(30 * mm, page_width - used)
+
     return [w_matricola, w_nome, w_turno, w_inizio, w_fine, w_note]
 
-# ======================= Build PDF =======================
+
+# ============================================================
+# Build PDF
+# ============================================================
+
 def build_pdf(
     path_out: Path,
     df: pd.DataFrame,
@@ -295,61 +379,69 @@ def build_pdf(
 ):
     oggi = datetime.now(_TZ_ROMA)
     file_name = f"SG_{oggi.strftime('%d%m%Y')}.pdf"
+
     if path_out.is_dir():
         path_out = path_out / file_name
     else:
         path_out = path_out.with_name(file_name)
 
-    right = 10 * mm
-    left = 10 * mm
-    top = 12 * mm
-    bottom = 12 * mm
-
     doc = SimpleDocTemplate(
         str(path_out),
         pagesize=A4,
-        rightMargin=right,
-        leftMargin=left,
-        topMargin=top,
-        bottomMargin=bottom,
+        rightMargin=MARGIN_RIGHT,
+        leftMargin=MARGIN_LEFT,
+        topMargin=MARGIN_TOP,
+        bottomMargin=MARGIN_BOTTOM,
     )
-    page_w = A4[0] - left - right
+
+    page_w = A4[0] - MARGIN_LEFT - MARGIN_RIGHT
 
     styles = getSampleStyleSheet()
+
+    # Titolo principale (più compatto ma leggibile)
     title_style = ParagraphStyle(
         "TitleTight",
         parent=styles["Title"],
         fontName="Helvetica-Bold",
         fontSize=15,
-        leading=20,
+        leading=16,
         textColor=colors.red,
-        spaceAfter=6,
+        spaceAfter=3,
         spaceBefore=0,
     )
+
+    # Titolo gruppo (residenza)
     group_style = ParagraphStyle(
         "GroupTitle",
         parent=styles["Heading2"],
         fontSize=11,
-        leading=16,
-        spaceBefore=6,
-        spaceAfter=2,
+        leading=12,
+        spaceBefore=3,
+        spaceAfter=1,
         alignment=TA_CENTER,
     )
+
+    # Note (colonna più “alta”): qui compattiamo molto
     note_style = ParagraphStyle(
         "NoteBody",
         parent=styles["BodyText"],
-        leading=8,
+        fontSize=NOTE_FONT_SIZE,
+        leading=NOTE_LEADING,
         wordWrap="CJK",
     )
+
     note_style_blue = ParagraphStyle(
         "NoteBodyBlue",
         parent=note_style,
         textColor=BLUE,
     )
+
+    # Nota export a destra (piccola)
     small_note_style = ParagraphStyle(
         "SmallExportNote",
         parent=styles["Normal"],
         fontSize=7,
+        leading=8,
         textColor=colors.grey,
         spaceBefore=1,
         spaceAfter=0,
@@ -365,6 +457,7 @@ def build_pdf(
     title_para = Paragraph(header_text, title_style)
     elems.append(_header_table(title_para, logo_path, page_w, export_text, small_note_style))
 
+    # Blocchi per residenza
     if "Residenza" not in df.columns:
         blocks = [("TUTTI", df)]
     else:
@@ -373,6 +466,7 @@ def build_pdf(
 
     first_block = True
     for res_name, gdf in blocks:
+        # Ordinamento e collasso ripetizioni
         if inner_sort == "inizio" and "Inizio" in gdf.columns:
             by = ["Inizio"] + (["Cognome e Nome"] if "Cognome e Nome" in gdf.columns else [])
             gdf = gdf.sort_values(by=by).reset_index(drop=True)
@@ -384,37 +478,41 @@ def build_pdf(
                 by.append("Inizio")
             if by:
                 gdf = gdf.sort_values(by=by).reset_index(drop=True)
-            gdf = _collapse_repeats(
-                gdf,
-                key_cols=("Cognome e Nome", "Matricola"),
-                collapse_cols=("Cognome e Nome", "Matricola"),
-            )
+
+            gdf = _collapse_repeats(gdf)
 
         trasferte = _trasferta_mask(gdf)
+
         added_mask = (
             gdf["_added"].fillna(False)
             if "_added" in gdf.columns
             else pd.Series(False, index=gdf.index)
         )
 
+        # Spazio tra blocchi (ridotto)
         if not first_block:
-            elems.append(Spacer(1, 3 * mm))
+            elems.append(Spacer(1, BLOCK_SPACER_MM))
         first_block = False
 
         elems.append(Paragraph(res_name, group_style))
 
         added_rows = {i for i, v in enumerate(added_mask.tolist(), start=1) if v}
 
-        data = _table_data_for(gdf, note_style, para_style_blue=note_style_blue, rows_blue=added_rows)
-        header = data[0]
+        data = _table_data_for(
+            gdf,
+            note_style,
+            para_style_blue=note_style_blue,
+            rows_blue=added_rows,
+        )
 
+        header = data[0]
         col_idx = {name: header.index(name) for name in ["Turno", "Inizio", "Fine"] if name in header}
         idx_nome = header.index("Cognome e Nome") if "Cognome e Nome" in header else None
         idx_matricola = header.index("Matricola") if "Matricola" in header else None
 
         col_widths = _calc_col_widths(page_w)
 
-        # Sostituisco i segnaposto ARROW_MARK con frecce vettoriali (blu se riga aggiunta)
+        # Sostituisci ARROW_MARK con freccia vettoriale
         if idx_nome is not None:
             for ridx, row in enumerate(data[1:], start=1):
                 if str(row[idx_nome]).strip() == ARROW_MARK:
@@ -429,14 +527,26 @@ def build_pdf(
 
         tbl = Table(data, repeatRows=1, colWidths=col_widths)
 
+        # ------------------------------------------------------------
+        # Stili tabella (compatti) per far rientrare le pagine
+        # ------------------------------------------------------------
         base_style = [
             ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
             ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
+
+            # Compattazione: font e padding (chiave per ridurre pagine)
+            ("FONTSIZE", (0, 0), (-1, -1), TABLE_FONT_SIZE),
+            ("LEADING", (0, 0), (-1, -1), TABLE_LEADING),
+
+            ("TOPPADDING", (0, 0), (-1, -1), CELL_PAD_TOP),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), CELL_PAD_BOTTOM),
+            ("LEFTPADDING", (0, 0), (-1, -1), CELL_PAD_LEFT),
+            ("RIGHTPADDING", (0, 0), (-1, -1), CELL_PAD_RIGHT),
         ]
 
-        # --- CENTRO colonne orario ---
+        # Centro colonne orario
         idx_inizio = col_idx.get("Inizio")
         idx_fine = col_idx.get("Fine")
         if idx_inizio is not None:
@@ -444,28 +554,30 @@ def build_pdf(
         if idx_fine is not None:
             base_style.append(("ALIGN", (idx_fine, 1), (idx_fine, -1), "CENTER"))
 
-         # --- Tutte le celle della colonna Turno in grassetto ---
+        # Turno sempre in grassetto
         idx_turno = col_idx.get("Turno")
         if idx_turno is not None:
             base_style.append(("FONTNAME", (idx_turno, 1), (idx_turno, -1), "Helvetica-Bold"))
 
-
-        # --- LOGICA STILE ---
+        # Logica stile righe
         for i, row in enumerate(data[1:], start=1):
             turno_val = row[header.index("Turno")] if "Turno" in header else ""
-            # Righe aggiunte manualmente: tutta la riga blu/grassetto
+
+            # Righe aggiunte manualmente: tutta la riga blu + grassetto
             if i in added_rows:
                 base_style.append(("TEXTCOLOR", (0, i), (-1, i), BLUE))
                 base_style.append(("FONTNAME", (0, i), (-1, i), "Helvetica-Bold"))
-            # Righe con turno numerico (510, 520, ecc): tutta la riga grassetto
+
+            # Righe con turno numerico: tutta la riga grassetto
             elif _is_turno_numero(turno_val):
                 base_style.append(("FONTNAME", (0, i), (-1, i), "Helvetica-Bold"))
+
             # Trasferte automatiche: blu/grassetto su Matricola, Nome, Turno, Inizio, Fine
-            elif trasferte.loc[i-1]:
+            elif trasferte.loc[i - 1]:
                 for idx in [idx_matricola, idx_nome] + list(col_idx.values()):
                     if idx is not None:
                         base_style.append(("FONTNAME", (idx, i), (idx, i), "Helvetica-Bold"))
-                        base_style.append(("TEXTCOLOR", (idx, i), (idx, i), colors.HexColor("#0b5ed7")))
+                        base_style.append(("TEXTCOLOR", (idx, i), (idx, i), BLUE))
 
         tbl.setStyle(TableStyle(base_style))
         elems.append(tbl)
